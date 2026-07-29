@@ -107,7 +107,37 @@ python benchmark.py --device cuda --mode camera_only \
   --out artifacts/benchmark_camera_only_jetson.json
 ```
 
-**Tomorrow:** radar SDK + dual BGT, then `--live` full cam1+radar2.
+**Tomorrow:** radar SDK + dual BGT, then full live cam1+radar2.
+
+### Live camera-only (radar unavailable) — today
+
+Full multimodal net, but radar gated off (`radar_present=False`, zero radar tensor):
+
+```bash
+cd ~/AIDisco/JetsonCA
+git pull
+export LD_LIBRARY_PATH=$CONDA_PREFIX/lib:${LD_LIBRARY_PATH:-}
+
+# timed KPI + ~20s live prints
+chmod +x scripts/run_live_camera_only.sh
+./scripts/run_live_camera_only.sh
+
+# or:
+python live_camera_only.py --device cuda --camera-device 0 --runs 30 --duration-s 20 \
+  --out artifacts/live_camera_only_jetson.json
+
+# continuous until Ctrl+C
+python infer_headless.py --no-radar --device cuda --camera-device 0
+```
+
+How live modes differ:
+
+| Command | Camera | Radar | Model flags |
+|---|---|---|---|
+| `benchmark.py` (no `--live`) | synthetic | synthetic | as `--mode` |
+| `live_camera_only.py` / `--no-radar` | USB live | none | `radar_present=False` |
+| `benchmark.py --live` (default both) | USB live | needs BGT | both present |
+| tomorrow `--live` + radars | USB | 1–2 BGT | full MM |
 
 ## OpenCV note (Miniforge)
 

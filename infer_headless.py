@@ -41,6 +41,7 @@ def parse_args():
   p.add_argument("--radar2-uuid", type=str, default=None)
   p.add_argument("--mirror-radar2", action="store_true", default=True)
   p.add_argument("--no-mirror-radar2", action="store_false", dest="mirror_radar2")
+  p.add_argument("--no-radar", action="store_true", help="Camera-only live: skip radar SDK, radar_present=False")
   p.add_argument("--dual-radar-fuse", choices=("mean", "max"), default="mean")
   p.add_argument("--window", type=int, default=30)
   p.add_argument("--detect-threshold", type=float, default=0.35)
@@ -55,7 +56,7 @@ def parse_args():
 def main():
   args = parse_args()
   tweaks = apply_jetson_runtime_tweaks()
-  print(json.dumps({"runtime": tweaks, "device": args.device}, indent=2))
+  print(json.dumps({"runtime": tweaks, "device": args.device, "no_radar": args.no_radar}, indent=2))
 
   model, labels, config = load_checkpoint(args.checkpoint, args.device)
   model.eval()
@@ -80,76 +81,99 @@ def main():
   t0 = time.time()
   last_print = 0.0
   n_infer = 0
+
+  def _infer_once(meta: dict):
+    nonlocal n_infer, last_print
+    if args.no_radar:
+      if len(camera_buf) < window:
+        return
+      radar = torch.zeros(1, window, 3, 32, 32, device=args.device)
+      radar_present = torch.zeros(1, dtype=torch.bool, device=args.device)
+    else:
+      if len(radar_buf) < window or len(camera_buf) < window:
+        return
+      radar = torch.stack(list(radar_buf), dim=0).unsqueeze(0).to(args.device)
+      radar_present = torch.ones(1, dtype=torch.bool, device=args.device)
+
+    cam = torch.stack(list(camera_buf), dim=0).unsqueeze(0).to(args.device)
+    camera_present = torch.ones(1, dtype=torch.bool, device=args.device)
+
+    with torch.no_grad():
+      out = model(radar, cam, radar_present=radar_present, camera_present=camera_present)
+      logits = out["activity_logits"] if "activity_logits" in out else out["logits"]
+      probs = F.softmax(logits, dim=-1)[0].detach().cpu().numpy()
+
+    pred_idx = int(np.argmax(probs))
+    conf = float(probs[pred_idx])
+    label = labels[pred_idx] if conf >= args.detect_threshold else "none"
+    display = inference_label(label) if label != "none" else "none"
+    n_infer += 1
+    now = time.time()
+
+    row = {
+      "t": now,
+      "label": display,
+      "raw_label": label,
+      "conf": conf,
+      "probs": {labels[i]: float(probs[i]) for i in range(len(labels))},
+      "radar_meta": meta,
+      "radar_present": (not args.no_radar),
+    }
+    if jsonl is not None:
+      jsonl.write(json.dumps(row) + "\n")
+      jsonl.flush()
+
+    if now - last_print >= args.print_every:
+      last_print = now
+      fps = n_infer / max(now - t0, 1e-6)
+      print(
+        f"[{now - t0:6.1f}s] {display:16s} conf={conf:.2f}  "
+        f"infer_fps~{fps:.1f}  radar={'off' if args.no_radar else meta}"
+      )
+
   try:
-    with DualRadarSession(
-      num_rx=args.num_rx,
-      profile=args.radar_profile,
-      frame_rate_hz=args.frame_rate,
-      radar1_uuid=args.radar1_uuid,
-      radar2_uuid=args.radar2_uuid,
-      mirror_radar2=args.mirror_radar2,
-      min_range_m=args.min_range_m,
-      max_range_m=args.max_range_m,
-    ) as radars:
-      print(f"radar: {radars.status_text}")
+    if args.no_radar:
+      print("camera-only live: radar SDK skipped")
       while True:
         if args.duration_s > 0 and (time.time() - t0) >= args.duration_s:
           break
-
-        r1, r2 = radars.read_tensors()
-        fused, meta = fuse_radar_streams_for_model(
-          r1,
-          r2,
-          mode=args.dual_radar_fuse,
-          mirror_radar2=args.mirror_radar2,
-        )
-        if fused is not None:
-          radar_buf.append(fused.detach().cpu())
-
         frame = camera.get_latest()
         if frame is not None:
           camera_buf.append(preprocess_camera_frame(frame, image_size).cpu())
+        _infer_once({"radar": "disabled"})
+        time.sleep(0.01)
+    else:
+      with DualRadarSession(
+        num_rx=args.num_rx,
+        profile=args.radar_profile,
+        frame_rate_hz=args.frame_rate,
+        radar1_uuid=args.radar1_uuid,
+        radar2_uuid=args.radar2_uuid,
+        mirror_radar2=args.mirror_radar2,
+        min_range_m=args.min_range_m,
+        max_range_m=args.max_range_m,
+      ) as radars:
+        print(f"radar: {radars.status_text}")
+        while True:
+          if args.duration_s > 0 and (time.time() - t0) >= args.duration_s:
+            break
 
-        if len(radar_buf) < window or len(camera_buf) < window:
-          time.sleep(0.01)
-          continue
-
-        radar = torch.stack(list(radar_buf), dim=0).unsqueeze(0).to(args.device)
-        cam = torch.stack(list(camera_buf), dim=0).unsqueeze(0).to(args.device)
-        radar_present = torch.ones(1, dtype=torch.bool, device=args.device)
-        camera_present = torch.ones(1, dtype=torch.bool, device=args.device)
-
-        with torch.no_grad():
-          out = model(radar, cam, radar_present=radar_present, camera_present=camera_present)
-          logits = out["activity_logits"] if "activity_logits" in out else out["logits"]
-          probs = F.softmax(logits, dim=-1)[0].detach().cpu().numpy()
-
-        pred_idx = int(np.argmax(probs))
-        conf = float(probs[pred_idx])
-        label = labels[pred_idx] if conf >= args.detect_threshold else "none"
-        display = inference_label(label) if label != "none" else "none"
-        n_infer += 1
-        now = time.time()
-
-        row = {
-          "t": now,
-          "label": display,
-          "raw_label": label,
-          "conf": conf,
-          "probs": {labels[i]: float(probs[i]) for i in range(len(labels))},
-          "radar_meta": meta,
-        }
-        if jsonl is not None:
-          jsonl.write(json.dumps(row) + "\n")
-          jsonl.flush()
-
-        if now - last_print >= args.print_every:
-          last_print = now
-          fps = n_infer / max(now - t0, 1e-6)
-          print(
-            f"[{now - t0:6.1f}s] {display:16s} conf={conf:.2f}  "
-            f"infer_fps~{fps:.1f}  radar={radars.status_text}"
+          r1, r2 = radars.read_tensors()
+          fused, meta = fuse_radar_streams_for_model(
+            r1,
+            r2,
+            mode=args.dual_radar_fuse,
+            mirror_radar2=args.mirror_radar2,
           )
+          if fused is not None:
+            radar_buf.append(fused.detach().cpu())
+
+          frame = camera.get_latest()
+          if frame is not None:
+            camera_buf.append(preprocess_camera_frame(frame, image_size).cpu())
+
+          _infer_once(meta)
+          time.sleep(0.01)
   except KeyboardInterrupt:
     print("\nstopped")
   finally:
