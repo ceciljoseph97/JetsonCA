@@ -78,7 +78,39 @@ python3 export_onnx.py --checkpoint artifacts/best_multimodal_crossattention.pt
 #   --saveEngine=artifacts/model_fp16.engine --fp16
 ```
 
+## One-camera checks (today — no radar)
+
+Plug USB camera, then:
+
+```bash
+cd ~/AIDisco/JetsonCA
+git pull
+chmod +x scripts/run_check_camera.sh
+./scripts/run_check_camera.sh
+```
+
+Or step-by-step:
+
+```bash
+export LD_LIBRARY_PATH=/usr/lib/aarch64-linux-gnu:${LD_LIBRARY_PATH:-}
+python check_camera.py --frames 30 --infer --out artifacts/camera_check_jetson.json
+```
+
+Writes:
+- `artifacts/camera_check_jetson.json` — probe + capture + optional `camera_only` latency
+- `artifacts/camera_preview.jpg` — last frame
+
+Also useful (synthetic, no USB needed):
+
+```bash
+python benchmark.py --device cuda --mode camera_only \
+  --out artifacts/benchmark_camera_only_jetson.json
+```
+
+**Tomorrow:** radar SDK + dual BGT, then `--live` full cam1+radar2.
+
 ## OpenCV note (Miniforge)
+
 
 Synthetic `benchmark.py` no longer needs OpenCV. If `import cv2` fails with `CXXABI_1.3.15`, fix later for live camera:
 
