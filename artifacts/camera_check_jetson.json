@@ -1,0 +1,60 @@
+{
+  "runtime": {
+    "is_jetson": true,
+    "machine": "aarch64",
+    "threads": 2,
+    "cuda": true,
+    "device_name": "Orin"
+  },
+  "device": "cuda",
+  "pass": {
+    "opencv_import": true,
+    "camera_found": true,
+    "frames_captured": true,
+    "window_filled": true,
+    "infer_lt_100ms": true
+  },
+  "opencv": {
+    "ok": true,
+    "error": null,
+    "version": "5.0.0"
+  },
+  "probed": [
+    {
+      "index": 1,
+      "label": "Camera 1 (640x480)",
+      "width": 640,
+      "height": 480
+    }
+  ],
+  "selected_index": 1,
+  "capture": {
+    "frames": 30,
+    "elapsed_s": 2.041030168533325,
+    "approx_fps": 14.698459857434573,
+    "shape": [
+      480,
+      640,
+      3
+    ],
+    "mean": 139.50077582465278,
+    "std": 41.401691015335906
+  },
+  "preview": "artifacts/camera_preview.jpg",
+  "infer_camera_only": {
+    "runs": 10,
+    "latency_ms_mean": 72.89720440021483,
+    "latency_ms_p50": 19.44927450040268,
+    "latency_ms_p95": 311.2486443996199,
+    "fps": 13.717947186422597,
+    "last_label": "crossing",
+    "last_conf": 0.9688124656677246,
+    "labels": [
+      "crossing",
+      "walking_away",
+      "walking_towards"
+    ]
+  },
+  "pass_count": 5,
+  "check_count": 5
+}
