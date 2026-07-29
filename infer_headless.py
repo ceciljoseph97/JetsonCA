@@ -102,11 +102,15 @@ def main():
       out = model(radar, cam, radar_present=radar_present, camera_present=camera_present)
       logits = out["activity_logits"] if "activity_logits" in out else out["logits"]
       probs = F.softmax(logits, dim=-1)[0].detach().cpu().numpy()
+      human_prob = 1.0
+      if out.get("human_logits") is not None:
+        human_prob = float(F.softmax(out["human_logits"], dim=-1)[0, 1].item())
 
-    pred_idx = int(np.argmax(probs))
-    conf = float(probs[pred_idx])
-    label = labels[pred_idx] if conf >= args.detect_threshold else "none"
-    display = inference_label(label) if label != "none" else "none"
+    display, conf = inference_label(labels, human_prob, probs)
+    label = display
+    if conf < args.detect_threshold:
+      display = "none"
+      label = "none"
     n_infer += 1
     now = time.time()
 
@@ -115,6 +119,7 @@ def main():
       "label": display,
       "raw_label": label,
       "conf": conf,
+      "human_prob": human_prob,
       "probs": {labels[i]: float(probs[i]) for i in range(len(labels))},
       "radar_meta": meta,
       "radar_present": (not args.no_radar),

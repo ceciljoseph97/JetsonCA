@@ -121,17 +121,21 @@ def main():
 
       logits = out.get("activity_logits", out.get("logits"))
       probs = F.softmax(logits, dim=-1)[0].detach().cpu().numpy()
-      idx = int(np.argmax(probs))
-      conf = float(probs[idx])
-      raw = labels[idx] if conf >= args.detect_threshold else "none"
-      display = inference_label(raw) if raw != "none" else "none"
+      human_prob = 1.0
+      if out.get("human_logits") is not None:
+        human_prob = float(F.softmax(out["human_logits"], dim=-1)[0, 1].item())
+      display, conf = inference_label(labels, human_prob, probs)
+      raw = display
+      if conf < args.detect_threshold:
+        display, raw = "none", "none"
       row = {
         "t": time.time(),
         "label": display,
         "raw_label": raw,
         "conf": conf,
+        "human_prob": human_prob,
         "latency_ms": dt_ms,
-        "probs": {labels[i]: float(probs[i]) for i in range(len(labels))},
+        "probs": {labels[i]: float(probs[i]) for i in range(min(len(labels), len(probs)))},
         "radar_present": False,
       }
       preds.append(row)
@@ -170,10 +174,12 @@ def main():
         n_infer += 1
         logits = out.get("activity_logits", out.get("logits"))
         probs = F.softmax(logits, dim=-1)[0].detach().cpu().numpy()
-        idx = int(np.argmax(probs))
-        conf = float(probs[idx])
-        raw = labels[idx] if conf >= args.detect_threshold else "none"
-        display = inference_label(raw) if raw != "none" else "none"
+        human_prob = 1.0
+        if out.get("human_logits") is not None:
+          human_prob = float(F.softmax(out["human_logits"], dim=-1)[0, 1].item())
+        display, conf = inference_label(labels, human_prob, probs)
+        if conf < args.detect_threshold:
+          display = "none"
         now = time.time()
         if now - last_print >= args.print_every:
           last_print = now

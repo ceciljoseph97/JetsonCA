@@ -107,18 +107,27 @@ python benchmark.py --device cuda --mode camera_only \
   --out artifacts/benchmark_camera_only_jetson.json
 ```
 
-**Tomorrow:** radar SDK + dual BGT, then full live cam1+radar2.
+### Live camera-only KPI bench (today — no radar)
 
-### Live camera-only (radar unavailable) — today
+Full AI-DISCO KPI report on USB frames (`radar_present=False`):
 
-Full multimodal net, but radar gated off (`radar_present=False`, zero radar tensor):
+```bash
+chmod +x scripts/run_benchmark_live_camera_only.sh
+./scripts/run_benchmark_live_camera_only.sh
+
+# or:
+python benchmark.py --live --mode camera_only --device cuda --camera-device 0 \
+  --out artifacts/benchmark_live_camera_only_kpi_jetson.json
+```
+
+### Live camera-only labels / jsonl (today)
 
 ```bash
 cd ~/AIDisco/JetsonCA
 git pull
 export LD_LIBRARY_PATH=$CONDA_PREFIX/lib:${LD_LIBRARY_PATH:-}
 
-# timed KPI + ~20s live prints
+# timed latency + ~20s live prints / jsonl
 chmod +x scripts/run_live_camera_only.sh
 ./scripts/run_live_camera_only.sh
 
@@ -135,9 +144,12 @@ How live modes differ:
 | Command | Camera | Radar | Model flags |
 |---|---|---|---|
 | `benchmark.py` (no `--live`) | synthetic | synthetic | as `--mode` |
-| `live_camera_only.py` / `--no-radar` | USB live | none | `radar_present=False` |
+| `benchmark.py --live --mode camera_only` | USB live | none | `radar_present=False` + full KPI JSON |
+| `live_camera_only.py` / `--no-radar` | USB live | none | labels/jsonl (+ light latency) |
 | `benchmark.py --live` (default both) | USB live | needs BGT | both present |
 | tomorrow `--live` + radars | USB | 1–2 BGT | full MM |
+
+**Tomorrow:** radar SDK + dual BGT, then full live cam1+radar2.
 
 ## OpenCV note (Miniforge)
 

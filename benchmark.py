@@ -32,11 +32,16 @@ from jetson_env import apply_jetson_runtime_tweaks, default_device, is_jetson
 from checkpoint import load_checkpoint, preprocess_camera_frame
 
 
-def _live_deps():
-  from radar_utils import DualRadarSession, fuse_radar_streams_for_model
+def _live_camera_deps():
   from realtime_multimodal import CameraStream
 
-  return DualRadarSession, fuse_radar_streams_for_model, CameraStream
+  return CameraStream
+
+
+def _live_radar_deps():
+  from radar_utils import DualRadarSession, fuse_radar_streams_for_model
+
+  return DualRadarSession, fuse_radar_streams_for_model
 
 # AI-DISCO KPIs for cam1+radar2 multimodal activity recognition on Jetson Nano–class edge.
 # Tuned to OUR stack (windowed cross-attention), not external partner gesture budgets.
@@ -65,7 +70,10 @@ CLI_EXAMPLES = """Examples:
       Run the default benchmark on the default checkpoint and write JSON to artifacts/.
 
   python benchmark.py --live
-      Run a live benchmark with connected camera/radar devices.
+      Live cam+radar KPI bench (needs BGT + USB cam).
+
+  python benchmark.py --live --mode camera_only
+      Live USB-camera KPI bench; radar gated off (no radar SDK required).
 
   python benchmark.py --all-modes
       Benchmark both, radar_only, and camera_only in one run.
@@ -659,6 +667,7 @@ def profile_mode(
 def profile_live_mode(
   model: nn.Module,
   *,
+  mode: str,
   batch: int,
   window: int,
   image_size: int,
@@ -680,139 +689,162 @@ def profile_live_mode(
 ) -> dict[str, Any]:
   if batch != 1:
     raise ValueError("live mode currently supports --batch-size 1 only")
+  if mode not in ("both", "camera_only"):
+    raise ValueError(f"live mode does not support --mode {mode!r} (use both or camera_only)")
 
-  DualRadarSession, fuse_radar_streams_for_model, CameraStream = _live_deps()
+  camera_only = mode == "camera_only"
+  CameraStream = _live_camera_deps()
 
-  radar_buffer: deque[torch.Tensor] = deque(maxlen=window)
   camera_buffer: deque[torch.Tensor] = deque(maxlen=window)
-  radar_present = torch.ones((1,), dtype=torch.bool, device=device)
+  radar_buffer: deque[torch.Tensor] = deque(maxlen=window)
+  radar_present = torch.tensor([not camera_only], dtype=torch.bool, device=device)
   camera_present = torch.ones((1,), dtype=torch.bool, device=device)
 
   model.eval()
   camera_stream = CameraStream(camera_device, camera_width, camera_height, camera_fps).start()
-  latest_meta: dict[str, Any] = {}
+  latest_meta: dict[str, Any] = {"camera_only": camera_only}
   stage_times: dict[str, list[float]] = defaultdict(list)
   compute: dict[str, Any] | None = None
+  warmup_remaining = int(warmup)
+  measured = 0
+
+  def _run_forward(radar_t: torch.Tensor, camera_t: torch.Tensor) -> None:
+    with torch.no_grad():
+      model(
+        radar_t,
+        camera_t,
+        radar_present=radar_present,
+        camera_present=camera_present,
+      )
+
+  def _measure_once(radar_t: torch.Tensor, camera_t: torch.Tensor, *, t_loop0: float) -> None:
+    nonlocal compute, measured, warmup_remaining
+    if compute is None:
+      with FlopCounter(model) as counter:
+        _run_forward(radar_t, camera_t)
+      compute = counter.summary()
+
+    if warmup_remaining > 0:
+      _run_forward(radar_t, camera_t)
+      _sync(device)
+      warmup_remaining -= 1
+      return
+
+    t0 = time.perf_counter()
+    _run_forward(radar_t, camera_t)
+    _sync(device)
+    inference_ms = (time.perf_counter() - t0) * 1000.0
+    stage_times["inference_ms"].append(inference_ms)
+    stage_times["total_loop_ms"].append((time.perf_counter() - t_loop0) * 1000.0)
+    measured += 1
 
   try:
-    with DualRadarSession(
-      num_rx=num_rx,
-      profile=radar_profile,
-      frame_rate_hz=frame_rate_hz,
-      radar1_uuid=radar1_uuid,
-      radar2_uuid=radar2_uuid,
-      mirror_radar2=mirror_radar2,
-      min_range_m=min_range_m,
-      max_range_m=max_range_m,
-    ) as radar_session:
-      if not radar_session.slots[0].available and not radar_session.slots[1].available:
-        raise RuntimeError("No live radar device available for --live benchmark")
-
-      warmup_remaining = int(warmup)
-      measured = 0
-
+    if camera_only:
+      print(
+        f"live camera_only KPI: cam={camera_device} window={window} "
+        "radar=OFF (zeros, radar_present=False)"
+      )
       while measured < runs:
         t_loop0 = time.perf_counter()
-
-        t0 = time.perf_counter()
-        radar1, radar2 = radar_session.read_tensors()
-        stage_times["radar_capture_ms"].append((time.perf_counter() - t0) * 1000.0)
-
-        t0 = time.perf_counter()
-        fused_radar, fuse_meta = fuse_radar_streams_for_model(
-          radar1,
-          radar2,
-          mode="mean",
-          mirror_radar2=mirror_radar2,
-        )
-        stage_times["radar_fuse_ms"].append((time.perf_counter() - t0) * 1000.0)
-        latest_meta = dict(fuse_meta)
-        latest_meta["status_text"] = radar_session.status_text
-
-        if fused_radar is None:
-          continue
-
         t0 = time.perf_counter()
         camera_rgb = camera_stream.get_latest()
         if camera_rgb is None:
+          time.sleep(0.005)
           continue
         camera_tensor = preprocess_camera_frame(camera_rgb, image_size).cpu()
         stage_times["camera_fetch_preprocess_ms"].append((time.perf_counter() - t0) * 1000.0)
 
-        radar_buffer.append(fused_radar.cpu())
         camera_buffer.append(camera_tensor)
-        if len(radar_buffer) < window or len(camera_buffer) < window:
+        if len(camera_buffer) < window:
           continue
 
-        radar_tensor = torch.stack(list(radar_buffer), dim=0).unsqueeze(0).to(device)
-        camera_tensor_batched = torch.stack(list(camera_buffer), dim=0).unsqueeze(0).to(device)
+        radar_t = torch.zeros(1, window, 3, 32, 32, device=device)
+        camera_t = torch.stack(list(camera_buffer), dim=0).unsqueeze(0).to(device)
+        _measure_once(radar_t, camera_t, t_loop0=t_loop0)
+    else:
+      DualRadarSession, fuse_radar_streams_for_model = _live_radar_deps()
+      with DualRadarSession(
+        num_rx=num_rx,
+        profile=radar_profile,
+        frame_rate_hz=frame_rate_hz,
+        radar1_uuid=radar1_uuid,
+        radar2_uuid=radar2_uuid,
+        mirror_radar2=mirror_radar2,
+        min_range_m=min_range_m,
+        max_range_m=max_range_m,
+      ) as radar_session:
+        if not radar_session.slots[0].available and not radar_session.slots[1].available:
+          raise RuntimeError("No live radar device available for --live --mode both")
 
-        if compute is None:
-          with FlopCounter(model) as counter:
-            with torch.no_grad():
-              model(
-                radar_tensor,
-                camera_tensor_batched,
-                radar_present=radar_present,
-                camera_present=camera_present,
-              )
-          compute = counter.summary()
+        while measured < runs:
+          t_loop0 = time.perf_counter()
 
-        if warmup_remaining > 0:
-          with torch.no_grad():
-            model(
-              radar_tensor,
-              camera_tensor_batched,
-              radar_present=radar_present,
-              camera_present=camera_present,
-            )
-          _sync(device)
-          warmup_remaining -= 1
-          continue
+          t0 = time.perf_counter()
+          radar1, radar2 = radar_session.read_tensors()
+          stage_times["radar_capture_ms"].append((time.perf_counter() - t0) * 1000.0)
 
-        t0 = time.perf_counter()
-        with torch.no_grad():
-          model(
-            radar_tensor,
-            camera_tensor_batched,
-            radar_present=radar_present,
-            camera_present=camera_present,
+          t0 = time.perf_counter()
+          fused_radar, fuse_meta = fuse_radar_streams_for_model(
+            radar1,
+            radar2,
+            mode="mean",
+            mirror_radar2=mirror_radar2,
           )
-        _sync(device)
-        inference_ms = (time.perf_counter() - t0) * 1000.0
-        stage_times["inference_ms"].append(inference_ms)
-        stage_times["total_loop_ms"].append((time.perf_counter() - t_loop0) * 1000.0)
-        measured += 1
+          stage_times["radar_fuse_ms"].append((time.perf_counter() - t0) * 1000.0)
+          latest_meta = dict(fuse_meta)
+          latest_meta["status_text"] = radar_session.status_text
+          latest_meta["camera_only"] = False
+
+          if fused_radar is None:
+            continue
+
+          t0 = time.perf_counter()
+          camera_rgb = camera_stream.get_latest()
+          if camera_rgb is None:
+            continue
+          camera_tensor = preprocess_camera_frame(camera_rgb, image_size).cpu()
+          stage_times["camera_fetch_preprocess_ms"].append((time.perf_counter() - t0) * 1000.0)
+
+          radar_buffer.append(fused_radar.cpu())
+          camera_buffer.append(camera_tensor)
+          if len(radar_buffer) < window or len(camera_buffer) < window:
+            continue
+
+          radar_t = torch.stack(list(radar_buffer), dim=0).unsqueeze(0).to(device)
+          camera_t = torch.stack(list(camera_buffer), dim=0).unsqueeze(0).to(device)
+          _measure_once(radar_t, camera_t, t_loop0=t_loop0)
   finally:
     camera_stream.stop()
 
-  if compute is None:
+  if compute is None or not stage_times["inference_ms"]:
     raise RuntimeError("Live benchmark did not gather enough frames to build a full input window")
 
+  lat_sum = _summarize_timing_series(stage_times["inference_ms"])
   latency = {
     "runs": float(runs),
     "warmup": float(warmup),
-    "latency_ms_mean": _summarize_timing_series(stage_times["inference_ms"])["mean_ms"],
-    "latency_ms_std": _summarize_timing_series(stage_times["inference_ms"])["std_ms"],
-    "latency_ms_min": _summarize_timing_series(stage_times["inference_ms"])["min_ms"],
-    "latency_ms_max": _summarize_timing_series(stage_times["inference_ms"])["max_ms"],
-    "latency_ms_p50": _summarize_timing_series(stage_times["inference_ms"])["p50_ms"],
-    "latency_ms_p95": _summarize_timing_series(stage_times["inference_ms"])["p95_ms"],
-    "latency_ms_p99": _summarize_timing_series(stage_times["inference_ms"])["p99_ms"],
-    "throughput_fps": float(1000.0 / max(_summarize_timing_series(stage_times["inference_ms"])["mean_ms"], 1e-9)),
+    "latency_ms_mean": lat_sum["mean_ms"],
+    "latency_ms_std": lat_sum["std_ms"],
+    "latency_ms_min": lat_sum["min_ms"],
+    "latency_ms_max": lat_sum["max_ms"],
+    "latency_ms_p50": lat_sum["p50_ms"],
+    "latency_ms_p95": lat_sum["p95_ms"],
+    "latency_ms_p99": lat_sum["p99_ms"],
+    "throughput_fps": float(1000.0 / max(lat_sum["mean_ms"], 1e-9)),
   }
   mean_s = latency["latency_ms_mean"] / 1000.0
   specs = compute.get("operation_specs", {})
   temporal_mops = float(specs.get("temporal_transformer", {}).get("mops", 0.0))
+  profile_mode_name = "live_camera_only" if camera_only else "live_both"
 
   return {
-    "mode": "live_both",
+    "mode": profile_mode_name,
     "input": {
       "batch": batch,
       "window": window,
       "radar_shape": [1, window, 3, 32, 32],
       "camera_shape": [1, window, 3, image_size, image_size],
-      "radar_present": True,
+      "radar_present": not camera_only,
       "camera_present": True,
     },
     "live_capture": {
@@ -820,19 +852,23 @@ def profile_live_mode(
       "camera_width": camera_width,
       "camera_height": camera_height,
       "camera_fps": camera_fps,
-      "num_rx": num_rx,
-      "radar_profile": radar_profile,
-      "frame_rate_hz": frame_rate_hz,
-      "radar1_uuid": radar1_uuid,
-      "radar2_uuid": radar2_uuid,
-      "mirror_radar2": mirror_radar2,
+      "num_rx": None if camera_only else num_rx,
+      "radar_profile": None if camera_only else radar_profile,
+      "frame_rate_hz": None if camera_only else frame_rate_hz,
+      "radar1_uuid": None if camera_only else radar1_uuid,
+      "radar2_uuid": None if camera_only else radar2_uuid,
+      "mirror_radar2": None if camera_only else mirror_radar2,
       "fusion_meta_last": latest_meta,
       "timing": {
         key: _summarize_timing_series(values) for key, values in stage_times.items() if values
       },
       "notes": [
-        "total_loop_ms includes live sensor polling, radar fusion, camera fetch/preprocess, and model inference.",
-        "latency.* remains model-forward latency only so old KPI thresholds stay comparable.",
+        (
+          "camera_only: radar tensor is zeros with radar_present=False; no radar SDK."
+          if camera_only
+          else "total_loop_ms includes live sensor polling, radar fusion, camera fetch/preprocess, and model inference."
+        ),
+        "latency.* remains model-forward latency only so KPI thresholds stay comparable.",
       ],
     },
     "compute": compute,
@@ -865,9 +901,15 @@ def run_benchmark(args) -> dict[str, Any]:
   platform_info = collect_platform_info(device)
 
   if args.live:
+    live_mode = args.mode
+    if args.all_modes:
+      raise SystemExit("--all-modes is not supported with --live (pick --mode both or camera_only)")
+    if live_mode == "radar_only":
+      raise SystemExit("--live --mode radar_only is not supported yet")
     profiles = [
       profile_live_mode(
         model,
+        mode=live_mode,
         batch=args.batch_size,
         window=args.window,
         image_size=int(config["image_size"]),
@@ -904,8 +946,11 @@ def run_benchmark(args) -> dict[str, Any]:
       for mode in modes
     ]
 
-  # Primary KPI profile: multimodal both (cam1 + dual-radar fused as radar stream)
-  primary = next((p for p in profiles if p["mode"] in ("both", "live_both")), profiles[0])
+  # Primary KPI profile: multimodal both, or live_camera_only when that is the run
+  primary = next(
+    (p for p in profiles if p["mode"] in ("both", "live_both", "live_camera_only", "camera_only")),
+    profiles[0],
+  )
   kpi = build_kpi_report(
     profile=primary,
     params=params,
@@ -914,6 +959,12 @@ def run_benchmark(args) -> dict[str, Any]:
   )
   primary_specs = primary.get("compute", {}).get("operation_specs", {})
 
+  deploy_profile = "cam1_radar2"
+  deploy_note = "Model sees 1 camera stream + 1 fused dual-radar stream (early fuse)."
+  if args.live and args.mode == "camera_only":
+    deploy_profile = "cam1_radar_off"
+    deploy_note = "Live camera-only: radar zeros + radar_present=False (no radar SDK)."
+
   report = {
     "timestamp_utc": datetime.now(timezone.utc).isoformat(),
     "benchmark_source": "live" if args.live else "synthetic",
@@ -921,10 +972,10 @@ def run_benchmark(args) -> dict[str, Any]:
     "device": str(device),
     "platform": platform_info,
     "deployment": {
-      "profile": "cam1_radar2",
+      "profile": deploy_profile,
       "n_cameras": int(args.n_cameras),
-      "n_radars": int(args.n_radars),
-      "note": "Model sees 1 camera stream + 1 fused dual-radar stream (early fuse).",
+      "n_radars": 0 if (args.live and args.mode == "camera_only") else int(args.n_radars),
+      "note": deploy_note,
     },
     "labels": labels,
     "config": config,
@@ -1153,21 +1204,21 @@ def parse_args():
   parser.add_argument("--runs", type=int, default=30 if is_jetson() else 50)
   parser.add_argument("--mode", choices=("both", "radar_only", "camera_only"), default="both")
   parser.add_argument("--all-modes", action="store_true", help="Benchmark both + radar_only + camera_only")
-  parser.add_argument("--live", action="store_true", help="Use actual connected camera/radar devices instead of synthetic tensors")
+  parser.add_argument("--live", action="store_true", help="Use live USB camera (and radar unless --mode camera_only)")
   parser.add_argument("--n-cameras", type=int, default=1, help="Deployment camera count (KPI buffer est.)")
   parser.add_argument("--n-radars", type=int, default=2, help="Deployment radar count (KPI buffer est.)")
   parser.add_argument("--camera-device", type=int, default=0, help="Live mode: camera index")
   parser.add_argument("--camera-width", type=int, default=640, help="Live mode: requested camera width")
   parser.add_argument("--camera-height", type=int, default=480, help="Live mode: requested camera height")
   parser.add_argument("--camera-fps", type=float, default=15.0, help="Live mode: requested camera FPS")
-  parser.add_argument("--num-rx", type=int, default=3, help="Live mode: radar receiver channels")
-  parser.add_argument("--radar-profile", type=str, default="safe", help="Live mode: radar configuration profile")
-  parser.add_argument("--frame-rate", type=float, default=5.0, help="Live mode: radar frame rate")
-  parser.add_argument("--radar1-uuid", type=str, default=None, help="Live mode: optional primary radar UUID")
-  parser.add_argument("--radar2-uuid", type=str, default=None, help="Live mode: optional secondary radar UUID or __none__")
-  parser.add_argument("--no-mirror-radar2", action="store_true", help="Live mode: do not mirror radar1 when radar2 is missing")
-  parser.add_argument("--min-range-m", type=float, default=0.0, help="Live mode: minimum radar range gate in meters")
-  parser.add_argument("--max-range-m", type=float, default=None, help="Live mode: maximum radar range gate in meters")
+  parser.add_argument("--num-rx", type=int, default=3, help="Live mode both: radar receiver channels")
+  parser.add_argument("--radar-profile", type=str, default="safe", help="Live mode both: radar configuration profile")
+  parser.add_argument("--frame-rate", type=float, default=5.0, help="Live mode both: radar frame rate")
+  parser.add_argument("--radar1-uuid", type=str, default=None, help="Live mode both: optional primary radar UUID")
+  parser.add_argument("--radar2-uuid", type=str, default=None, help="Live mode both: optional secondary radar UUID or __none__")
+  parser.add_argument("--no-mirror-radar2", action="store_true", help="Live mode both: do not mirror radar1 when radar2 is missing")
+  parser.add_argument("--min-range-m", type=float, default=0.0, help="Live mode both: minimum radar range gate in meters")
+  parser.add_argument("--max-range-m", type=float, default=None, help="Live mode both: maximum radar range gate in meters")
   default_out = (
     Path("artifacts/benchmark_cam1_radar2_kpi_jetson.json")
     if is_jetson()
@@ -1179,6 +1230,16 @@ def parse_args():
 
 def main():
   args = parse_args()
+  if args.live and args.mode == "camera_only" and args.out == (
+    Path("artifacts/benchmark_cam1_radar2_kpi_jetson.json")
+    if is_jetson()
+    else Path("artifacts/benchmark_cam1_radar2_kpi.json")
+  ):
+    args.out = (
+      Path("artifacts/benchmark_live_camera_only_kpi_jetson.json")
+      if is_jetson()
+      else Path("artifacts/benchmark_live_camera_only_kpi.json")
+    )
   tweaks = apply_jetson_runtime_tweaks()
   print(f"runtime: {tweaks}")
   report = run_benchmark(args)
