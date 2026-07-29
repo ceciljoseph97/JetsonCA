@@ -11,27 +11,36 @@ from pathlib import Path
 
 import os
 
-import cv2
 import numpy as np
 import torch
 import torch.nn.functional as F
 
-try:
-  import imageio.v2 as imageio
-except ImportError:  # pragma: no cover - optional recording dependency
-  imageio = None  # type: ignore[assignment]
-
+from checkpoint import load_checkpoint, preprocess_camera_frame
 from label_hierarchy import inference_label
 from model import MultiModalCrossAttentionNet
 from preprocessing import do_inference_processing
 from radar_bgt import configure_bgt_device
 from range_doppler import DopplerAlgo
 
+# Re-export for callers that still import from realtime_multimodal
+__all__ = [
+  "CameraStream",
+  "load_checkpoint",
+  "preprocess_camera_frame",
+  "probe_camera_devices",
+  "open_video_capture",
+]
+
+try:
+  import imageio.v2 as imageio
+except ImportError:  # pragma: no cover - optional recording dependency
+  imageio = None  # type: ignore[assignment]
+
 try:
   from ifxradarsdk import get_version_full
   from ifxradarsdk.common.exceptions import ErrorFrameAcquisitionFailed
   from ifxradarsdk.fmcw import DeviceFmcw
-except ImportError:  # pragma: no cover - allows GUI import without hardware SDK
+except ImportError:  # pragma: no cover - allows import without hardware SDK
   def get_version_full() -> str:
     return "ifxradarsdk not installed"
 
@@ -39,8 +48,16 @@ except ImportError:  # pragma: no cover - allows GUI import without hardware SDK
   DeviceFmcw = None  # type: ignore[misc, assignment]
 
 
+def _cv2():
+  """Lazy OpenCV import so synthetic KPI bench works without a working cv2 install."""
+  import cv2
+
+  return cv2
+
+
 @contextmanager
 def _opencv_log_quiet():
+  cv2 = _cv2()
   prev_level = None
   try:
     if hasattr(cv2, "utils") and hasattr(cv2.utils, "logging"):
@@ -83,6 +100,7 @@ def _camera_capture_quiet():
 
 
 def _capture_backends_for_platform() -> list[int]:
+  cv2 = _cv2()
   if sys.platform != "win32":
     return [0]
   order: list[int] = []
@@ -100,8 +118,9 @@ def open_video_capture(
   *,
   verify_frame: bool = True,
   read_retries: int = 5,
-) -> cv2.VideoCapture | None:
+):
   """Open a camera by index; tries MSMF then DSHOW on Windows."""
+  cv2 = _cv2()
   with _camera_capture_quiet():
     for backend in _capture_backends_for_platform():
       cap = cv2.VideoCapture(device_id, backend)
@@ -135,6 +154,7 @@ class CameraStream:
     self._latest_rgb = None
 
   def start(self, warmup_s: float = 5.0):
+    cv2 = _cv2()
     self._cap = open_video_capture(self.device_id, verify_frame=True)
     if self._cap is None:
       raise RuntimeError(f"Could not open camera device {self.device_id}")
@@ -152,6 +172,7 @@ class CameraStream:
     return self
 
   def _reader_loop(self):
+    cv2 = _cv2()
     while not self._stop.is_set():
       ok, frame = self._cap.read()
       if not ok:
@@ -176,6 +197,7 @@ class CameraStream:
 
 
 def _camera_frame_signature(frame: np.ndarray) -> np.ndarray:
+  cv2 = _cv2()
   gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if frame.ndim == 3 else frame
   small = cv2.resize(gray, (48, 48), interpolation=cv2.INTER_AREA)
   return small.astype(np.float32)
@@ -186,11 +208,12 @@ def _camera_signatures_similar(sig_a: np.ndarray, sig_b: np.ndarray, *, threshol
 
 
 def _camera_frame_is_live(frame: np.ndarray, *, min_mean: float = 6.0, min_std: float = 2.5) -> bool:
+  cv2 = _cv2()
   gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if frame.ndim == 3 else frame
   return float(gray.mean()) >= min_mean and float(gray.std()) >= min_std
 
 
-def _read_probe_frames(cap: cv2.VideoCapture, *, count: int = 4) -> list[np.ndarray]:
+def _read_probe_frames(cap, *, count: int = 4) -> list[np.ndarray]:
   frames: list[np.ndarray] = []
   for _ in range(count):
     ok, frame = cap.read()
@@ -202,6 +225,7 @@ def _read_probe_frames(cap: cv2.VideoCapture, *, count: int = 4) -> list[np.ndar
 
 def probe_camera_devices(max_index: int = 8, stop_after_misses: int = 2) -> list[dict[str, int | str | bool]]:
   """Return indices that OpenCV can open with a distinct live stream."""
+  cv2 = _cv2()
   found: list[dict[str, int | str | bool]] = []
   signatures: list[np.ndarray] = []
   misses = 0
@@ -239,42 +263,8 @@ def probe_camera_devices(max_index: int = 8, stop_after_misses: int = 2) -> list
   return found
 
 
-def load_checkpoint(path: Path, device: str):
-  checkpoint = torch.load(path, map_location=device)
-  config = checkpoint["config"]
-  labels = checkpoint.get("activity_labels", checkpoint["labels"])
-  model = MultiModalCrossAttentionNet(
-    num_classes=len(labels),
-    num_activity_classes=int(config.get("num_activity_classes", len(labels))),
-    model_dim=int(config["model_dim"]),
-    num_heads=int(config["num_heads"]),
-    num_layers=int(config["num_layers"]),
-    dropout=float(config["dropout"]),
-    modality_dropout=0.0,
-    temporal_mode=str(config.get("temporal_mode", "none")),
-    enable_human_head=bool(config.get("enable_human_head", False)),
-  ).to(device)
-
-  state = dict(checkpoint["model_state"])
-  remapped = {}
-  for key, value in state.items():
-    if key.startswith("classifier."):
-      remapped[key.replace("classifier.", "activity_classifier.", 1)] = value
-    else:
-      remapped[key] = value
-  model.load_state_dict(remapped, strict=False)
-  model.eval()
-  return model, labels, config
-
-
-def preprocess_camera_frame(frame_rgb: np.ndarray, image_size: int) -> torch.Tensor:
-  resized = cv2.resize(frame_rgb, (image_size, image_size), interpolation=cv2.INTER_AREA)
-  tensor = torch.from_numpy(resized).permute(2, 0, 1).float() / 255.0
-  tensor = (tensor - 0.5) / 0.5
-  return tensor
-
-
 def make_radar_montage(radar_tensor: np.ndarray) -> np.ndarray:
+  cv2 = _cv2()
   channels = [np.asarray(radar_tensor[i], dtype=np.float32) for i in range(radar_tensor.shape[0])]
   channel_images = []
   for channel in channels:
@@ -410,6 +400,7 @@ class LiveVisualizer:
       }
 
   def _refresh(self, _frame):
+    cv2 = _cv2()
     with self._lock:
       state = dict(self._state)
 

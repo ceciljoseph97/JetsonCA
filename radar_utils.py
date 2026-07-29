@@ -9,7 +9,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-import cv2
 import numpy as np
 import torch
 
@@ -25,6 +24,12 @@ try:
 except ImportError:  # pragma: no cover - allows import without hardware SDK
   ErrorFrameAcquisitionFailed = Exception  # type: ignore[misc, assignment]
   DeviceFmcw = None  # type: ignore[misc, assignment]
+
+
+def _cv2():
+  import cv2
+
+  return cv2
 
 FUSE_MODES = ("max", "mean", "sum")
 RX_MODES = ("fuse", "rx0", "rx1", "rx2")
@@ -172,6 +177,7 @@ def fused_to_rgb(fused_map: np.ndarray, *, log_scale: bool = True) -> np.ndarray
 
   channel = np.clip((channel - lo) / (hi - lo), 0.0, 1.0)
   channel = np.uint8(channel * 255.0)
+  cv2 = _cv2()
   colored = cv2.applyColorMap(channel, cv2.COLORMAP_VIRIDIS)
   return cv2.cvtColor(colored, cv2.COLOR_BGR2RGB)
 
@@ -212,7 +218,7 @@ def combine_sensor_panels(
   def _resize(img: np.ndarray) -> np.ndarray:
     if img.shape[0] == h and img.shape[1] == w:
       return img
-    return cv2.resize(img, (w, h), interpolation=cv2.INTER_AREA)
+    return _cv2().resize(img, (w, h), interpolation=_cv2().INTER_AREA)
 
   left = _resize(radar1_rgb)
   right = _resize(radar2_rgb)

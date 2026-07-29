@@ -29,8 +29,14 @@ import torch
 import torch.nn as nn
 
 from jetson_env import apply_jetson_runtime_tweaks, default_device, is_jetson
-from radar_utils import DualRadarSession, fuse_radar_streams_for_model
-from realtime_multimodal import CameraStream, load_checkpoint, preprocess_camera_frame
+from checkpoint import load_checkpoint, preprocess_camera_frame
+
+
+def _live_deps():
+  from radar_utils import DualRadarSession, fuse_radar_streams_for_model
+  from realtime_multimodal import CameraStream
+
+  return DualRadarSession, fuse_radar_streams_for_model, CameraStream
 
 # AI-DISCO KPIs for cam1+radar2 multimodal activity recognition on Jetson Nano–class edge.
 # Tuned to OUR stack (windowed cross-attention), not external partner gesture budgets.
@@ -674,6 +680,8 @@ def profile_live_mode(
 ) -> dict[str, Any]:
   if batch != 1:
     raise ValueError("live mode currently supports --batch-size 1 only")
+
+  DualRadarSession, fuse_radar_streams_for_model, CameraStream = _live_deps()
 
   radar_buffer: deque[torch.Tensor] = deque(maxlen=window)
   camera_buffer: deque[torch.Tensor] = deque(maxlen=window)

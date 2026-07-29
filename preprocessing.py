@@ -2,9 +2,21 @@
 
 import numpy as np
 import torch
-from cv2 import INTER_AREA, resize
+import torch.nn.functional as F
 
 from range_gating import apply_range_gate_raw
+
+
+def _resize_hwc(maps: np.ndarray, size: tuple[int, int] = (32, 32)) -> np.ndarray:
+  """maps: (H, W, C) float -> resized (size[1], size[0], C). Prefers cv2, falls back to torch."""
+  try:
+    from cv2 import INTER_AREA, resize
+
+    return resize(maps, dsize=size, interpolation=INTER_AREA)
+  except Exception:
+    t = torch.from_numpy(np.ascontiguousarray(maps)).permute(2, 0, 1).unsqueeze(0).float()
+    t = F.interpolate(t, size=(size[1], size[0]), mode="area")
+    return t.squeeze(0).permute(1, 2, 0).cpu().numpy()
 
 
 def do_preprocessing(
@@ -36,7 +48,7 @@ def do_preprocessing(
       range_doppler[index] = channel - channel_min
 
   range_doppler = np.transpose(range_doppler, (2, 1, 0))
-  range_doppler = resize(range_doppler, dsize=(32, 32), interpolation=INTER_AREA)
+  range_doppler = _resize_hwc(range_doppler, size=(32, 32))
   range_doppler = np.transpose(range_doppler, (2, 1, 0))
   return range_doppler
 

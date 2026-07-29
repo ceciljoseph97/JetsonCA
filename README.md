@@ -78,7 +78,16 @@ python3 export_onnx.py --checkpoint artifacts/best_multimodal_crossattention.pt
 #   --saveEngine=artifacts/model_fp16.engine --fp16
 ```
 
-## AI-DISCO KPI targets (ours)
+## OpenCV note (Miniforge)
+
+Synthetic `benchmark.py` no longer needs OpenCV. If `import cv2` fails with `CXXABI_1.3.15`, fix later for live camera:
+
+```bash
+conda install -y -c conda-forge "libstdcxx-ng>=13"
+# or
+export LD_LIBRARY_PATH=/usr/lib/aarch64-linux-gnu:$LD_LIBRARY_PATH
+```
+
 
 - latency mean < 100 ms, p95 < 150 ms, ≥ 8 FPS  
 - weights < 32 MB, params < 5 M, buffer < 64 MB  

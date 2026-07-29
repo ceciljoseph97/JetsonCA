@@ -13,10 +13,17 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
+from checkpoint import load_checkpoint
 from jetson_env import apply_jetson_runtime_tweaks, default_device
 from label_hierarchy import inference_label
 from radar_utils import DualRadarSession, fuse_radar_streams_for_model
-from realtime_multimodal import CameraStream, load_checkpoint, preprocess_camera_frame
+from checkpoint import preprocess_camera_frame
+
+
+def _camera_stream_cls():
+  from realtime_multimodal import CameraStream
+
+  return CameraStream
 
 
 def parse_args():
@@ -58,7 +65,7 @@ def main():
   radar_buf: deque[torch.Tensor] = deque(maxlen=window)
   camera_buf: deque[torch.Tensor] = deque(maxlen=window)
 
-  camera = CameraStream(
+  camera = _camera_stream_cls()(
     args.camera_device,
     args.camera_width,
     args.camera_height,

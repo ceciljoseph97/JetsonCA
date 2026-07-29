@@ -9,7 +9,7 @@ from pathlib import Path
 import torch
 
 from jetson_env import default_device
-from realtime_multimodal import load_checkpoint
+from checkpoint import load_checkpoint
 
 
 class ActivityForward(torch.nn.Module):
