@@ -3,8 +3,10 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-# Help Miniforge find system libstdc++ if pip OpenCV needs CXXABI_1.3.15
-export LD_LIBRARY_PATH="/usr/lib/aarch64-linux-gnu:${LD_LIBRARY_PATH:-}"
+# Prefer conda libstdc++ (newer CXXABI) over system — pip OpenCV often needs this.
+if [[ -n "${CONDA_PREFIX:-}" ]]; then
+  export LD_LIBRARY_PATH="${CONDA_PREFIX}/lib:${LD_LIBRARY_PATH:-}"
+fi
 
 python3 check_camera.py \
   --frames 30 \

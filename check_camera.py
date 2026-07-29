@@ -66,10 +66,10 @@ def main():
     print("FAIL: OpenCV import")
     print(cv2_err)
     print(
-      "\nFix hints:\n"
+      "\nFix hints (pip OpenCV needs NEWER libstdc++ than Ubuntu's):\n"
       "  conda install -y -c conda-forge 'libstdcxx-ng>=13'\n"
-      "  # or\n"
-      "  export LD_LIBRARY_PATH=/usr/lib/aarch64-linux-gnu:${LD_LIBRARY_PATH:-}\n"
+      "  export LD_LIBRARY_PATH=$CONDA_PREFIX/lib:${LD_LIBRARY_PATH:-}\n"
+      "  # if still broken:\n"
       "  pip uninstall -y opencv-python opencv-python-headless\n"
       "  conda install -y -c conda-forge opencv\n"
     )

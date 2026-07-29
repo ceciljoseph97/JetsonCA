@@ -92,7 +92,7 @@ chmod +x scripts/run_check_camera.sh
 Or step-by-step:
 
 ```bash
-export LD_LIBRARY_PATH=/usr/lib/aarch64-linux-gnu:${LD_LIBRARY_PATH:-}
+export LD_LIBRARY_PATH=$CONDA_PREFIX/lib:${LD_LIBRARY_PATH:-}
 python check_camera.py --frames 30 --infer --out artifacts/camera_check_jetson.json
 ```
 
@@ -111,22 +111,27 @@ python benchmark.py --device cuda --mode camera_only \
 
 ## OpenCV note (Miniforge)
 
-
-Synthetic `benchmark.py` no longer needs OpenCV. If `import cv2` fails with `CXXABI_1.3.15`, fix later for live camera:
+Synthetic `benchmark.py` no longer needs OpenCV. If `import cv2` fails with `CXXABI_1.3.15`,
+the **system** libstdc++ is too old for the pip wheel — use conda’s newer one:
 
 ```bash
 conda install -y -c conda-forge "libstdcxx-ng>=13"
-# or
-export LD_LIBRARY_PATH=/usr/lib/aarch64-linux-gnu:$LD_LIBRARY_PATH
+export LD_LIBRARY_PATH=$CONDA_PREFIX/lib:${LD_LIBRARY_PATH:-}
+python -c "import cv2; print(cv2.__version__)"
+
+# still broken?
+pip uninstall -y opencv-python opencv-python-headless
+conda install -y -c conda-forge opencv
 ```
 
+## AI-DISCO KPI targets (ours)
 
 - latency mean < 100 ms, p95 < 150 ms, ≥ 8 FPS  
 - weights < 32 MB, params < 5 M, buffer < 64 MB  
 - < 15 GFLOPs/inf, < 8000 MMACs/inf  
 - temporal < 50 MMACs, cross-attn < 100 MMACs  
 
-Host (RTX) already clears these; **re-run on Nano** for the latency/FPS platform gate.
+Host (RTX) already clears these; **re-run on Orin** for the latency/FPS platform gate.
 
 ## Relation to Crossattention
 
