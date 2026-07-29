@@ -1,0 +1,17 @@
+# JetsonCA — edge deployment slice of Crossattention
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+artifacts/*.onnx
+artifacts/*.trt
+artifacts/*.engine
+artifacts/benchmark_*.json
+!artifacts/best_multimodal_crossattention.pt
+recordings/
+data/
+*.mp4
+*.gif
+.DS_Store

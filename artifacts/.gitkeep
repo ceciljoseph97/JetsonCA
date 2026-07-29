@@ -1,0 +1,2 @@
+# Keep artifacts dir; checkpoint is copied from Crossattention.
+!.gitkeep

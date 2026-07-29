@@ -1,0 +1,12 @@
+# Jetson / JetPack Python deps (install torch from NVIDIA wheel, not pip default)
+# See README.md for JetPack-matched torch install.
+
+numpy>=1.19
+opencv-python-headless>=4.5
+Pillow>=8.0
+# optional live radar
+# ifxradarsdk  # install from Infineon SDK for your platform
+
+# optional ONNX path
+# onnx
+# onnxruntime  # or onnxruntime-gpu if available for aarch64
