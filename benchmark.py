@@ -17,7 +17,11 @@ from __future__ import annotations
 import argparse
 import json
 import platform
+import re
+import shutil
+import subprocess
 import sys
+import threading
 import time
 from collections import defaultdict, deque
 from datetime import datetime, timezone
@@ -186,6 +190,168 @@ def collect_platform_info(device: torch.device) -> dict[str, Any]:
     info["gpu_name"] = None
     info["jetson_like"] = False
   return info
+
+
+def _mean_max(values: list[float]) -> dict[str, float] | None:
+  if not values:
+    return None
+  arr = np.asarray(values, dtype=np.float64)
+  return {
+    "count": float(arr.size),
+    "mean": float(arr.mean()),
+    "max": float(arr.max()),
+  }
+
+
+def _parse_tegrastats_line(line: str) -> dict[str, float]:
+  stats: dict[str, float] = {}
+  ram = re.search(r"RAM (\d+)/(\d+)MB", line)
+  if ram:
+    stats["ram_used_mb"] = float(ram.group(1))
+    stats["ram_total_mb"] = float(ram.group(2))
+
+  emc = re.search(r"EMC_FREQ (\d+)%@?(\d+)?", line)
+  if emc:
+    stats["emc_util_percent"] = float(emc.group(1))
+    if emc.group(2):
+      stats["emc_freq_mhz"] = float(emc.group(2))
+
+  gr3d = re.search(r"GR3D_FREQ (\d+)%@?(\d+)?", line)
+  if gr3d:
+    stats["gr3d_util_percent"] = float(gr3d.group(1))
+    if gr3d.group(2):
+      stats["gr3d_freq_mhz"] = float(gr3d.group(2))
+
+  cpu = re.search(r"CPU \[(.*?)\]", line)
+  if cpu:
+    vals = [float(m.group(1)) for m in re.finditer(r"(\d+)%", cpu.group(1))]
+    if vals:
+      stats["cpu_avg_percent"] = float(np.mean(vals))
+      stats["cpu_peak_percent"] = float(np.max(vals))
+
+  return stats
+
+
+class SystemMonitor:
+  def __init__(self, *, enabled: bool, interval_ms: int = 1000):
+    self.enabled = bool(enabled)
+    self.interval_s = max(float(interval_ms) / 1000.0, 0.1)
+    self._stop = threading.Event()
+    self._thread: threading.Thread | None = None
+    self._tegrastats_thread: threading.Thread | None = None
+    self._tegrastats_proc: subprocess.Popen[str] | None = None
+    self._psutil = None
+    self._process = None
+    self.samples: list[dict[str, float]] = []
+    self.tegrastats_samples: list[dict[str, float]] = []
+    self.notes: list[str] = []
+
+  def start(self):
+    if not self.enabled:
+      return
+    try:
+      import psutil  # type: ignore
+
+      self._psutil = psutil
+      self._process = psutil.Process()
+      psutil.cpu_percent(interval=None, percpu=True)
+      self._process.cpu_percent(interval=None)
+    except Exception as exc:
+      self.notes.append(f"psutil unavailable: {exc}")
+      self._psutil = None
+      self._process = None
+
+    tegrastats_bin = shutil.which("tegrastats")
+    if tegrastats_bin is not None:
+      try:
+        self._tegrastats_proc = subprocess.Popen(
+          [tegrastats_bin, "--interval", str(int(self.interval_s * 1000))],
+          stdout=subprocess.PIPE,
+          stderr=subprocess.STDOUT,
+          text=True,
+          bufsize=1,
+        )
+        self._tegrastats_thread = threading.Thread(target=self._read_tegrastats, daemon=True)
+        self._tegrastats_thread.start()
+      except Exception as exc:
+        self.notes.append(f"tegrastats failed to start: {exc}")
+
+    if self._psutil is not None:
+      self._thread = threading.Thread(target=self._sample_loop, daemon=True)
+      self._thread.start()
+
+  def _sample_loop(self):
+    assert self._psutil is not None
+    assert self._process is not None
+    while not self._stop.wait(self.interval_s):
+      try:
+        cpu_per_core = self._psutil.cpu_percent(interval=None, percpu=True)
+        vm = self._psutil.virtual_memory()
+        sample = {
+          "system_cpu_avg_percent": float(np.mean(cpu_per_core)) if cpu_per_core else 0.0,
+          "system_cpu_peak_percent": float(np.max(cpu_per_core)) if cpu_per_core else 0.0,
+          "system_ram_used_mb": float(vm.used) / (1024.0 ** 2),
+          "process_cpu_percent": float(self._process.cpu_percent(interval=None)),
+          "process_rss_mb": float(self._process.memory_info().rss) / (1024.0 ** 2),
+          "process_threads": float(self._process.num_threads()),
+        }
+        self.samples.append(sample)
+      except Exception:
+        pass
+
+  def _read_tegrastats(self):
+    if self._tegrastats_proc is None or self._tegrastats_proc.stdout is None:
+      return
+    for line in self._tegrastats_proc.stdout:
+      if self._stop.is_set():
+        break
+      parsed = _parse_tegrastats_line(line.strip())
+      if parsed:
+        self.tegrastats_samples.append(parsed)
+
+  def stop(self):
+    if not self.enabled:
+      return
+    self._stop.set()
+    if self._thread is not None:
+      self._thread.join(timeout=2.0)
+    if self._tegrastats_proc is not None:
+      try:
+        self._tegrastats_proc.terminate()
+        self._tegrastats_proc.wait(timeout=2.0)
+      except Exception:
+        try:
+          self._tegrastats_proc.kill()
+        except Exception:
+          pass
+    if self._tegrastats_thread is not None:
+      self._tegrastats_thread.join(timeout=2.0)
+
+  def summary(self) -> dict[str, Any]:
+    proc_cpu = _mean_max([s["process_cpu_percent"] for s in self.samples if "process_cpu_percent" in s])
+    proc_rss = _mean_max([s["process_rss_mb"] for s in self.samples if "process_rss_mb" in s])
+    sys_cpu_avg = _mean_max([s["system_cpu_avg_percent"] for s in self.samples if "system_cpu_avg_percent" in s])
+    sys_cpu_peak = _mean_max([s["system_cpu_peak_percent"] for s in self.samples if "system_cpu_peak_percent" in s])
+    ram_used = _mean_max([s["system_ram_used_mb"] for s in self.samples if "system_ram_used_mb" in s])
+    gr3d = _mean_max([s["gr3d_util_percent"] for s in self.tegrastats_samples if "gr3d_util_percent" in s])
+    emc = _mean_max([s["emc_util_percent"] for s in self.tegrastats_samples if "emc_util_percent" in s])
+
+    out: dict[str, Any] = {
+      "enabled": self.enabled,
+      "sample_interval_ms": float(self.interval_s * 1000.0),
+      "process_cpu_percent": proc_cpu,
+      "process_rss_mb": proc_rss,
+      "system_cpu_avg_percent": sys_cpu_avg,
+      "system_cpu_peak_percent": sys_cpu_peak,
+      "system_ram_used_mb": ram_used,
+      "tegrastats_gr3d_util_percent": gr3d,
+      "tegrastats_emc_util_percent": emc,
+      "psutil_samples": float(len(self.samples)),
+      "tegrastats_samples": float(len(self.tegrastats_samples)),
+    }
+    if self.notes:
+      out["notes"] = self.notes
+    return out
 
 
 def build_kpi_report(
@@ -905,54 +1071,59 @@ def run_benchmark(args) -> dict[str, Any]:
     n_radars=args.n_radars,
   )
   platform_info = collect_platform_info(device)
+  monitor = SystemMonitor(enabled=args.system_monitor, interval_ms=args.system_monitor_interval_ms)
+  monitor.start()
 
-  if args.live:
-    live_mode = args.mode
-    if args.all_modes:
-      raise SystemExit("--all-modes is not supported with --live (pick --mode both or camera_only)")
-    if live_mode == "radar_only":
-      raise SystemExit("--live --mode radar_only is not supported yet")
-    profiles = [
-      profile_live_mode(
-        model,
-        mode=live_mode,
-        batch=args.batch_size,
-        window=args.window,
-        image_size=int(config["image_size"]),
-        device=device,
-        warmup=args.warmup,
-        runs=args.runs,
-        num_rx=args.num_rx,
-        radar_profile=args.radar_profile,
-        frame_rate_hz=args.frame_rate,
-        camera_device=args.camera_device,
-        camera_width=args.camera_width,
-        camera_height=args.camera_height,
-        camera_fps=args.camera_fps,
-        radar1_uuid=args.radar1_uuid,
-        radar2_uuid=args.radar2_uuid,
-        radar1_port=args.radar1_port,
-        radar2_port=args.radar2_port,
-        mirror_radar2=not args.no_mirror_radar2,
-        min_range_m=args.min_range_m,
-        max_range_m=args.max_range_m,
-      )
-    ]
-  else:
-    modes = ["both", "radar_only", "camera_only"] if args.all_modes else [args.mode]
-    profiles = [
-      profile_mode(
-        model,
-        mode=mode,
-        batch=args.batch_size,
-        window=args.window,
-        image_size=int(config["image_size"]),
-        device=device,
-        warmup=args.warmup,
-        runs=args.runs,
-      )
-      for mode in modes
-    ]
+  try:
+    if args.live:
+      live_mode = args.mode
+      if args.all_modes:
+        raise SystemExit("--all-modes is not supported with --live (pick --mode both or camera_only)")
+      if live_mode == "radar_only":
+        raise SystemExit("--live --mode radar_only is not supported yet")
+      profiles = [
+        profile_live_mode(
+          model,
+          mode=live_mode,
+          batch=args.batch_size,
+          window=args.window,
+          image_size=int(config["image_size"]),
+          device=device,
+          warmup=args.warmup,
+          runs=args.runs,
+          num_rx=args.num_rx,
+          radar_profile=args.radar_profile,
+          frame_rate_hz=args.frame_rate,
+          camera_device=args.camera_device,
+          camera_width=args.camera_width,
+          camera_height=args.camera_height,
+          camera_fps=args.camera_fps,
+          radar1_uuid=args.radar1_uuid,
+          radar2_uuid=args.radar2_uuid,
+          radar1_port=args.radar1_port,
+          radar2_port=args.radar2_port,
+          mirror_radar2=not args.no_mirror_radar2,
+          min_range_m=args.min_range_m,
+          max_range_m=args.max_range_m,
+        )
+      ]
+    else:
+      modes = ["both", "radar_only", "camera_only"] if args.all_modes else [args.mode]
+      profiles = [
+        profile_mode(
+          model,
+          mode=mode,
+          batch=args.batch_size,
+          window=args.window,
+          image_size=int(config["image_size"]),
+          device=device,
+          warmup=args.warmup,
+          runs=args.runs,
+        )
+        for mode in modes
+      ]
+  finally:
+    monitor.stop()
 
   # Primary KPI profile: multimodal both, or live_camera_only when that is the run
   primary = next(
@@ -995,6 +1166,7 @@ def run_benchmark(args) -> dict[str, Any]:
     "key_meanings": KEY_MEANINGS,
     "operation_specs": primary_specs,
     "kpi": kpi,
+    "system_monitor": monitor.summary(),
     "notes": [
       "FLOPs = 2 * MACs (mul-add counted as 2).",
       "MOPS / MMACs = MACs / 1e6.",
@@ -1035,6 +1207,21 @@ def _print_summary(report: dict[str, Any]):
   bm = report.get("buffer_memory_estimate", {})
   print(f"weights:    {wm.get('kb', 0):.1f} kB  ({wm.get('mb', 0):.3f} MB)")
   print(f"buffer~:    {bm.get('mb', 0):.3f} MB  (input window estimate)")
+  mon = report.get("system_monitor") or {}
+  cpu = mon.get("system_cpu_avg_percent")
+  rss = mon.get("process_rss_mb")
+  gr3d = mon.get("tegrastats_gr3d_util_percent")
+  emc = mon.get("tegrastats_emc_util_percent")
+  if cpu or rss or gr3d or emc:
+    print("system:")
+    if cpu:
+      print(f"  cpu avg/peak: {cpu['mean']:.1f}% / {cpu['max']:.1f}%")
+    if rss:
+      print(f"  process rss:  mean={rss['mean']:.1f} MB  peak={rss['max']:.1f} MB")
+    if gr3d:
+      print(f"  gr3d util:    mean={gr3d['mean']:.1f}%  peak={gr3d['max']:.1f}%")
+    if emc:
+      print(f"  emc util:     mean={emc['mean']:.1f}%  peak={emc['max']:.1f}%")
 
   kpi = report.get("kpi")
   if kpi:
@@ -1229,6 +1416,10 @@ def parse_args():
   parser.add_argument("--no-mirror-radar2", action="store_true", help="Live mode both: do not mirror radar1 when radar2 is missing")
   parser.add_argument("--min-range-m", type=float, default=0.0, help="Live mode both: minimum radar range gate in meters")
   parser.add_argument("--max-range-m", type=float, default=None, help="Live mode both: maximum radar range gate in meters")
+  parser.add_argument("--system-monitor", action="store_true", help="Sample CPU/RAM and tegrastats during benchmark")
+  parser.add_argument("--no-system-monitor", action="store_false", dest="system_monitor", help="Disable CPU/RAM/GPU resource sampling")
+  parser.set_defaults(system_monitor=True)
+  parser.add_argument("--system-monitor-interval-ms", type=int, default=1000, help="Sampling interval for system monitor")
   default_out = (
     Path("artifacts/benchmark_cam1_radar2_kpi_jetson.json")
     if is_jetson()
