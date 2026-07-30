@@ -1,4 +1,4 @@
-# Copyright (C) 2024 Infineon Technologies AG
+# Copyright (C) 2026 Infineon Technologies AG
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions are met:

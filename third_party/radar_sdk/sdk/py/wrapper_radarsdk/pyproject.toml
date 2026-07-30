@@ -23,7 +23,7 @@ name = "ifxradarsdk"  # Required
 # This is a one-line description or tagline of what your project does. This
 # corresponds to the "Summary" metadata field:
 # https://packaging.python.org/specifications/core-metadata/#summary
-description = "Python module for Infineon's 60GHz Avian radar sensors. Built from commit: 56673e8" # Optional
+description = "Python module for Infineon's 60GHz Avian radar sensors. Built from commit: d10f2bb" # Optional
 
 # Each entry is a string giving a single classification value for the distribution.
 # Classifiers are described in PEP 301, and the Python Package Index publishes
