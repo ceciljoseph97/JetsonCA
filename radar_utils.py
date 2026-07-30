@@ -44,6 +44,10 @@ def list_radar_uuids() -> list[str]:
     return []
 
 
+def list_radar_ports() -> list[str]:
+  return sorted(str(p) for p in Path("/dev").glob("ttyACM*"))
+
+
 def fuse_dual_radar_tensors(
   radar1: np.ndarray | torch.Tensor,
   radar2: np.ndarray | torch.Tensor | None,
@@ -262,6 +266,7 @@ def process_raw_frame(
 @dataclass
 class RadarDeviceSlot:
   uuid: str | None
+  port: str | None = None
   device: Any = None
   algo: DopplerAlgo | None = None
   available: bool = False
@@ -278,6 +283,8 @@ class DualRadarSession:
     frame_rate_hz: float,
     radar1_uuid: str | None = None,
     radar2_uuid: str | None = None,
+    radar1_port: str | None = None,
+    radar2_port: str | None = None,
     mirror_radar2: bool = True,
     min_range_m: float = 0.0,
     max_range_m: float | None = None,
@@ -290,6 +297,7 @@ class DualRadarSession:
     self.metrics = profile_metrics(profile)
     self.max_range_m = float(max_range_m if max_range_m is not None else self.metrics["max_range_m"])
     self.uuids = list_radar_uuids()
+    self.ports = list_radar_ports()
 
     primary_uuid = radar1_uuid
     if primary_uuid is None and self.uuids:
@@ -301,9 +309,19 @@ class DualRadarSession:
     elif secondary_uuid is None and len(self.uuids) > 1:
       secondary_uuid = self.uuids[1]
 
+    primary_port = None if radar1_port == "__none__" else radar1_port
+    if primary_port is None and primary_uuid is None and self.ports:
+      primary_port = self.ports[0]
+
+    secondary_port = None if radar2_port == "__none__" else radar2_port
+    if radar2_uuid == "__none__" or radar2_port == "__none__":
+      secondary_port = None
+    elif secondary_port is None and secondary_uuid is None and len(self.ports) > 1:
+      secondary_port = self.ports[1]
+
     self.slots: list[RadarDeviceSlot] = [
-      RadarDeviceSlot(uuid=primary_uuid, label="radar1"),
-      RadarDeviceSlot(uuid=secondary_uuid, label="radar2"),
+      RadarDeviceSlot(uuid=primary_uuid, port=primary_port, label="radar1"),
+      RadarDeviceSlot(uuid=secondary_uuid, port=secondary_port, label="radar2"),
     ]
     self._devices: list[Any] = []
     self._miss_streak: list[int] = [0, 0]
@@ -312,18 +330,27 @@ class DualRadarSession:
     if DeviceFmcw is None:
       return self
 
-    open_plan: list[tuple[RadarDeviceSlot, str | None]] = [
-      (self.slots[0], self.slots[0].uuid),
-      (self.slots[1], self.slots[1].uuid),
+    open_plan: list[tuple[RadarDeviceSlot, str, str | None]] = [
+      (self.slots[0], "uuid", self.slots[0].uuid),
+      (self.slots[1], "uuid", self.slots[1].uuid),
     ]
-    if self.slots[0].uuid is None:
-      open_plan[0] = (self.slots[0], "__default__")
+    if self.slots[0].uuid is None and self.slots[0].port is not None:
+      open_plan[0] = (self.slots[0], "port", self.slots[0].port)
+    elif self.slots[0].uuid is None:
+      open_plan[0] = (self.slots[0], "default", "__default__")
+    if self.slots[1].uuid is None and self.slots[1].port is not None:
+      open_plan[1] = (self.slots[1], "port", self.slots[1].port)
 
-    for slot, uuid in open_plan:
-      if uuid is None:
+    for slot, open_kind, target in open_plan:
+      if target is None:
         continue
       try:
-        device = DeviceFmcw() if uuid == "__default__" else DeviceFmcw(uuid=uuid)
+        if open_kind == "default":
+          device = DeviceFmcw()
+        elif open_kind == "port":
+          device = DeviceFmcw(port=target)
+        else:
+          device = DeviceFmcw(uuid=target)
         cfg = configure_bgt_device(
           device,
           self.num_rx,

@@ -39,6 +39,8 @@ def parse_args():
   p.add_argument("--frame-rate", type=float, default=5.0)
   p.add_argument("--radar1-uuid", type=str, default=None)
   p.add_argument("--radar2-uuid", type=str, default=None)
+  p.add_argument("--radar1-port", type=str, default=None, help="Optional primary radar port, e.g. /dev/ttyACM0")
+  p.add_argument("--radar2-port", type=str, default=None, help="Optional secondary radar port or __none__")
   p.add_argument("--mirror-radar2", action="store_true", default=True)
   p.add_argument("--no-mirror-radar2", action="store_false", dest="mirror_radar2")
   p.add_argument("--no-radar", action="store_true", help="Camera-only live: skip radar SDK, radar_present=False")
@@ -154,6 +156,8 @@ def main():
         frame_rate_hz=args.frame_rate,
         radar1_uuid=args.radar1_uuid,
         radar2_uuid=args.radar2_uuid,
+        radar1_port=args.radar1_port,
+        radar2_port=args.radar2_port,
         mirror_radar2=args.mirror_radar2,
         min_range_m=args.min_range_m,
         max_range_m=args.max_range_m,

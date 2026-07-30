@@ -683,6 +683,8 @@ def profile_live_mode(
   camera_fps: float,
   radar1_uuid: str | None,
   radar2_uuid: str | None,
+  radar1_port: str | None,
+  radar2_port: str | None,
   mirror_radar2: bool,
   min_range_m: float,
   max_range_m: float | None,
@@ -769,6 +771,8 @@ def profile_live_mode(
         frame_rate_hz=frame_rate_hz,
         radar1_uuid=radar1_uuid,
         radar2_uuid=radar2_uuid,
+        radar1_port=radar1_port,
+        radar2_port=radar2_port,
         mirror_radar2=mirror_radar2,
         min_range_m=min_range_m,
         max_range_m=max_range_m,
@@ -857,6 +861,8 @@ def profile_live_mode(
       "frame_rate_hz": None if camera_only else frame_rate_hz,
       "radar1_uuid": None if camera_only else radar1_uuid,
       "radar2_uuid": None if camera_only else radar2_uuid,
+      "radar1_port": None if camera_only else radar1_port,
+      "radar2_port": None if camera_only else radar2_port,
       "mirror_radar2": None if camera_only else mirror_radar2,
       "fusion_meta_last": latest_meta,
       "timing": {
@@ -925,6 +931,8 @@ def run_benchmark(args) -> dict[str, Any]:
         camera_fps=args.camera_fps,
         radar1_uuid=args.radar1_uuid,
         radar2_uuid=args.radar2_uuid,
+        radar1_port=args.radar1_port,
+        radar2_port=args.radar2_port,
         mirror_radar2=not args.no_mirror_radar2,
         min_range_m=args.min_range_m,
         max_range_m=args.max_range_m,
@@ -1216,6 +1224,8 @@ def parse_args():
   parser.add_argument("--frame-rate", type=float, default=5.0, help="Live mode both: radar frame rate")
   parser.add_argument("--radar1-uuid", type=str, default=None, help="Live mode both: optional primary radar UUID")
   parser.add_argument("--radar2-uuid", type=str, default=None, help="Live mode both: optional secondary radar UUID or __none__")
+  parser.add_argument("--radar1-port", type=str, default=None, help="Live mode both: optional primary radar port, e.g. /dev/ttyACM0")
+  parser.add_argument("--radar2-port", type=str, default=None, help="Live mode both: optional secondary radar port or __none__")
   parser.add_argument("--no-mirror-radar2", action="store_true", help="Live mode both: do not mirror radar1 when radar2 is missing")
   parser.add_argument("--min-range-m", type=float, default=0.0, help="Live mode both: minimum radar range gate in meters")
   parser.add_argument("--max-range-m", type=float, default=None, help="Live mode both: maximum radar range gate in meters")
