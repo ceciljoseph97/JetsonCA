@@ -29,7 +29,17 @@ Training / Tk GUI / large datasets stay in `../Crossattention`. This package is 
 cd ~/JetsonCA   # or wherever you cloned/copied
 python3 -m pip install -r requirements-jetson.txt
 
-# optional Infineon radar SDK (same as host Exploration install)
+# 2) Infineon radar SDK Python wrapper (required for --live with BGT radar)
+# Uses a prebuilt wheel from third_party/ifxradarsdk/ if present, otherwise
+# builds one from the bundled third_party/radar_sdk source tree.
+chmod +x scripts/install_ifxradarsdk.sh
+./scripts/install_ifxradarsdk.sh
+
+# verify radar SDK import + discovery
+python3 -c "from ifxradarsdk.fmcw import DeviceFmcw; print(DeviceFmcw.get_list())"
+
+# optional: direct device open smoke test
+python3 -c "from ifxradarsdk.fmcw import DeviceFmcw; d=DeviceFmcw(); print(d.get_sensor_information()); d.close()"
 ```
 
 ## Sync from Windows laptop

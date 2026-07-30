@@ -5,7 +5,8 @@ numpy>=1.19
 opencv-python-headless>=4.5
 Pillow>=8.0
 # optional live radar
-# ifxradarsdk  # install from Infineon SDK for your platform
+# ifxradarsdk  # install via scripts/install_ifxradarsdk.sh
+# (prebuilt wheel in third_party/ifxradarsdk/ or build from third_party/radar_sdk/)
 
 # optional ONNX path
 # onnx
