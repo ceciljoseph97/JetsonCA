@@ -11,13 +11,14 @@ Training / Tk GUI / large datasets stay in `../Crossattention`. This package is 
 | `model.py` | Multimodal cross-attention net |
 | `benchmark.py` | AI-DISCO KPI bench (synthetic or `--live`) |
 | `infer_headless.py` | Live inference, no GUI |
+| `gui_app.py` | Lightweight Tk GUI (cam + radar, no alignment) |
 | `export_onnx.py` | ONNX export → TensorRT |
 | `jetson_env.py` | Tegra detect + thread/memory tweaks |
 | `realtime_multimodal.py` | Camera stream + checkpoint load |
 | `radar_*.py` / `range_*.py` | BGT radar path (needs Infineon SDK) |
 | `artifacts/best_multimodal_crossattention.pt` | Checkpoint |
 
-**Not included:** `train.py`, `gui_app.py`, `data/`, evaluation notebooks.
+**Not included:** `train.py`, full Crossattention GUI, `data/`, evaluation notebooks.
 
 ## Setup on Jetson
 
@@ -77,6 +78,22 @@ python3 benchmark.py --live --device cuda --n-cameras 1 --n-radars 2 \
 ```bash
 ./scripts/run_infer_jetson.sh
 # Ctrl+C to stop
+```
+
+## GUI (VNC / local display)
+
+Requires `DISPLAY` (e.g. VNC into the Orin desktop). Lightweight Tk app — camera + radar panels, prediction, no alignment UI.
+
+```bash
+export LD_LIBRARY_PATH=$CONDA_PREFIX/lib:${LD_LIBRARY_PATH:-}
+python3 gui_app.py --device cuda --camera-device 0
+
+# camera-only (no radar SDK)
+python3 gui_app.py --device cuda --no-radar
+
+# explicit radar ports (when UUID discovery fails)
+python3 gui_app.py --device cuda \
+  --radar1-port /dev/ttyACM0 --radar2-port /dev/ttyACM1
 ```
 
 ## TensorRT path (optional)
