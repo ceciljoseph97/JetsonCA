@@ -1,0 +1,314 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>AI-DISCO Benchmark Summary Figure</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 24px;
+      color: #111827;
+      background: #ffffff;
+    }
+    h1, h2, h3 {
+      margin: 0 0 12px 0;
+    }
+    p {
+      margin: 6px 0;
+      line-height: 1.45;
+    }
+    .muted {
+      color: #6b7280;
+      font-size: 14px;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin: 18px 0 22px;
+    }
+    .card {
+      border: 1px solid #d1d5db;
+      border-radius: 10px;
+      padding: 14px;
+      background: #fafafa;
+    }
+    .stat {
+      font-size: 28px;
+      font-weight: 700;
+      margin-bottom: 4px;
+    }
+    .label {
+      font-size: 13px;
+      color: #4b5563;
+    }
+    .section {
+      margin-top: 28px;
+    }
+    table {
+      border-collapse: collapse;
+      width: 100%;
+      margin-top: 10px;
+      font-size: 14px;
+    }
+    th, td {
+      border: 1px solid #d1d5db;
+      padding: 8px 10px;
+      text-align: left;
+    }
+    th {
+      background: #f3f4f6;
+    }
+    .rank {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 12px;
+    }
+    .pill {
+      display: inline-block;
+      padding: 3px 8px;
+      border-radius: 999px;
+      font-size: 12px;
+      background: #e5e7eb;
+    }
+    .green { background: #dcfce7; }
+    .yellow { background: #fef3c7; }
+    .blue { background: #dbeafe; }
+    svg text {
+      font-family: Arial, sans-serif;
+      fill: #111827;
+      font-size: 12px;
+    }
+    .legend span {
+      display: inline-block;
+      margin-right: 14px;
+      font-size: 13px;
+    }
+    .swatch {
+      width: 10px;
+      height: 10px;
+      display: inline-block;
+      margin-right: 6px;
+      border-radius: 2px;
+    }
+  </style>
+</head>
+<body>
+  <h1>AI-DISCO Benchmark Summary</h1>
+  <p class="muted">
+    Single figure summary of latency, complexity, operations breakdown, best device categories,
+    and live pipeline timing across Jetson Orin, RTX 3050, and RTX 5090.
+  </p>
+
+  <div class="grid">
+    <div class="card">
+      <div class="stat">10/10</div>
+      <div class="label">KPI score on every run</div>
+    </div>
+    <div class="card">
+      <div class="stat">1.44M</div>
+      <div class="label">Parameters</div>
+    </div>
+    <div class="card">
+      <div class="stat">8.28</div>
+      <div class="label">GFLOPs / inference</div>
+    </div>
+    <div class="card">
+      <div class="stat">99.1%</div>
+      <div class="label">Conv share of MACs</div>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>Where Each Device Is Best</h2>
+    <div class="rank">
+      <div class="card">
+        <div><span class="pill green">Best raw speed</span></div>
+        <h3 style="margin-top:10px;">RTX 5090</h3>
+        <p>3.50 ms synthetic</p>
+        <p>13.79 ms live both</p>
+      </div>
+      <div class="card">
+        <div><span class="pill blue">Best edge target</span></div>
+        <h3 style="margin-top:10px;">Jetson Orin</h3>
+        <p>19.57 ms synthetic</p>
+        <p>27.82 ms live camera-only</p>
+        <p>50.25 ms live both</p>
+      </div>
+      <div class="card">
+        <div><span class="pill yellow">Overall ranking</span></div>
+        <h3 style="margin-top:10px;">So far</h3>
+        <p>1. RTX 5090</p>
+        <p>2. RTX 3050</p>
+        <p>3. Jetson Orin</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>Latency Figure</h2>
+    <p class="muted">Mean latency in milliseconds. Lower is better.</p>
+    <svg width="980" height="300" viewBox="0 0 980 300" role="img" aria-label="Latency bar chart">
+      <text x="0" y="20">0</text>
+      <text x="190" y="20">10</text>
+      <text x="380" y="20">20</text>
+      <text x="570" y="20">30</text>
+      <text x="760" y="20">40</text>
+      <text x="930" y="20">50 ms</text>
+
+      <text x="0" y="55">RTX 5090 synth</text>
+      <rect x="170" y="40" width="66" height="18" fill="#2563eb" />
+      <text x="245" y="54">3.50</text>
+
+      <text x="0" y="90">RTX 5090 live both</text>
+      <rect x="170" y="75" width="262" height="18" fill="#2563eb" />
+      <text x="440" y="89">13.79</text>
+
+      <text x="0" y="125">RTX 3050 synth</text>
+      <rect x="170" y="110" width="170" height="18" fill="#7c3aed" />
+      <text x="349" y="124">8.93</text>
+
+      <text x="0" y="160">RTX 3050 live both</text>
+      <rect x="170" y="145" width="689" height="18" fill="#7c3aed" />
+      <text x="868" y="159">36.25</text>
+
+      <text x="0" y="195">Orin synth</text>
+      <rect x="170" y="180" width="372" height="18" fill="#ea580c" />
+      <text x="551" y="194">19.57</text>
+
+      <text x="0" y="230">Orin live cam-only</text>
+      <rect x="170" y="215" width="529" height="18" fill="#ea580c" />
+      <text x="708" y="229">27.82</text>
+
+      <text x="0" y="265">Orin live both</text>
+      <rect x="170" y="250" width="955" height="18" fill="#ea580c" />
+      <text x="900" y="264">50.25</text>
+    </svg>
+  </div>
+
+  <div class="section">
+    <h2>Operations Summary</h2>
+    <p class="muted">Per-inference compute stays constant across all devices.</p>
+    <div class="legend">
+      <span><span class="swatch" style="background:#f97316;"></span>Conv 4102.96 MMACs</span>
+      <span><span class="swatch" style="background:#3b82f6;"></span>Temporal 12.03 MMACs</span>
+      <span><span class="swatch" style="background:#8b5cf6;"></span>Cross-attn 24.05 MMACs</span>
+      <span><span class="swatch" style="background:#22c55e;"></span>Head 0.07 MMACs</span>
+    </div>
+    <svg width="980" height="90" viewBox="0 0 980 90" role="img" aria-label="Operations share bar">
+      <rect x="0" y="24" width="970" height="28" fill="#f97316" />
+      <rect x="970" y="24" width="3" height="28" fill="#3b82f6" />
+      <rect x="973" y="24" width="6" height="28" fill="#8b5cf6" />
+      <rect x="979" y="24" width="1" height="28" fill="#22c55e" />
+      <text x="0" y="16">Compute share: conv dominates almost everything (~99.1%)</text>
+      <text x="0" y="75">Model footprint: 5.51 MB weights, 5.36 MB input buffer, 1.44M params, 8.28 GFLOPs</text>
+    </svg>
+  </div>
+
+  <div class="section">
+    <h2>Live Pipeline Flow</h2>
+    <p class="muted">Where time goes in real multimodal runs.</p>
+    <table>
+      <thead>
+        <tr>
+          <th>Platform</th>
+          <th>Radar capture (ms)</th>
+          <th>Camera preprocess (ms)</th>
+          <th>Inference (ms)</th>
+          <th>Total loop (ms)</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Jetson Orin live both</td>
+          <td>116.6</td>
+          <td>15.1</td>
+          <td>50.2</td>
+          <td>168.3</td>
+        </tr>
+        <tr>
+          <td>RTX 3050 live both</td>
+          <td>163.4</td>
+          <td>1.4</td>
+          <td>36.2</td>
+          <td>201.4</td>
+        </tr>
+        <tr>
+          <td>RTX 5090 live both</td>
+          <td>185.6</td>
+          <td>0.9</td>
+          <td>13.8</td>
+          <td>200.6</td>
+        </tr>
+      </tbody>
+    </table>
+    <p class="muted">
+      Main takeaway: model-forward latency is already good enough on Orin; end-to-end live throughput is mostly limited by radar acquisition cadence.
+    </p>
+  </div>
+
+  <div class="section">
+    <h2>How To Interpret The Rankings</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>View</th>
+          <th>Ranking</th>
+          <th>Reason</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Raw inference only</td>
+          <td>RTX 5090 &gt; RTX 3050 &gt; Jetson Orin</td>
+          <td>
+            Mean live-both inference latency is 13.8 ms on RTX 5090, 36.2 ms on RTX 3050,
+            and 50.2 ms on Orin.
+          </td>
+        </tr>
+        <tr>
+          <td>Full live loop</td>
+          <td>Jetson Orin &gt; RTX 5090 ≈ RTX 3050</td>
+          <td>
+            Total loop mean is 168.3 ms on Orin vs 200.6 ms on RTX 5090 and 201.4 ms on RTX 3050.
+          </td>
+        </tr>
+      </tbody>
+    </table>
+    <p class="muted">
+      So Orin is not the fastest GPU, but it is currently the best full live system in this benchmark set
+      because its radar capture stage is lower on average.
+    </p>
+    <p class="muted">
+      Approximate end-to-end loop rates: Orin 5.94 loops/s, RTX 5090 4.99 loops/s, RTX 3050 4.96 loops/s.
+    </p>
+  </div>
+
+  <div class="section">
+    <h2>Full Run Table</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Platform</th>
+          <th>Run</th>
+          <th>Mean (ms)</th>
+          <th>p50 (ms)</th>
+          <th>p95 (ms)</th>
+          <th>FPS</th>
+          <th>KPI</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td>RTX 5090</td><td>synthetic</td><td>3.50</td><td>3.37</td><td>4.21</td><td>285.9</td><td>10/10</td></tr>
+        <tr><td>RTX 5090</td><td>live both</td><td>13.79</td><td>10.16</td><td>23.07</td><td>72.5</td><td>10/10</td></tr>
+        <tr><td>RTX 3050</td><td>synthetic</td><td>8.93</td><td>8.85</td><td>9.32</td><td>112.0</td><td>10/10</td></tr>
+        <tr><td>RTX 3050</td><td>live both</td><td>36.25</td><td>20.42</td><td>88.26</td><td>27.6</td><td>10/10</td></tr>
+        <tr><td>Jetson Orin</td><td>synthetic</td><td>19.57</td><td>19.15</td><td>22.19</td><td>51.1</td><td>10/10</td></tr>
+        <tr><td>Jetson Orin</td><td>live camera-only</td><td>27.82</td><td>24.73</td><td>36.59</td><td>35.9</td><td>10/10</td></tr>
+        <tr><td>Jetson Orin</td><td>live both</td><td>50.25</td><td>56.98</td><td>58.74</td><td>19.9</td><td>10/10</td></tr>
+      </tbody>
+    </table>
+  </div>
+</body>
+</html>
