@@ -26,7 +26,7 @@ from tkinter import ttk
 
 from checkpoint import load_checkpoint, preprocess_camera_frame
 from jetson_env import apply_jetson_runtime_tweaks, default_device
-from label_hierarchy import format_hierarchy, inference_label
+from label_hierarchy import apply_logit_bias, format_hierarchy, inference_label
 from radar_utils import (
   DualRadarSession,
   combine_sensor_panels,
@@ -107,6 +107,10 @@ class InferenceWorker:
     window_len: int,
     detect_threshold: float,
     human_threshold: float,
+    min_margin: float = 0.12,
+    smooth_n: int = 5,
+    require_in_range: bool = True,
+    towards_bias: float = 0.35,
     min_range_m: float,
     max_range_m: float | None,
   ):
@@ -135,6 +139,11 @@ class InferenceWorker:
     self.state_lock = threading.Lock()
     self.detect_threshold = detect_threshold
     self.human_threshold = human_threshold
+    self.min_margin = float(min_margin)
+    self.smooth_n = max(1, int(smooth_n))
+    self.require_in_range = bool(require_in_range)
+    self.logit_bias = {"walking_towards": float(towards_bias)} if towards_bias else {}
+    self.pred_hist: deque[str] = deque(maxlen=self.smooth_n)
     self.radar_enabled = not no_radar
     self.camera_enabled = True
 
@@ -144,6 +153,7 @@ class InferenceWorker:
     self.latest_state: dict[str, Any] = {
       "status": "idle",
       "prediction": "-",
+      "raw_prediction": "-",
       "hierarchy_text": "",
       "confidence": 0.0,
       "human_prob": 0.0,
@@ -198,6 +208,7 @@ class InferenceWorker:
       )
       logits = out.get("activity_logits", out.get("logits"))
       probs = F.softmax(logits[0], dim=-1).detach().cpu().numpy()
+      probs = apply_logit_bias(probs, self.labels, self.logit_bias)
       human_prob = 1.0
       if out.get("human_logits") is not None:
         human_prob = float(F.softmax(out["human_logits"][0], dim=-1)[1].item())
@@ -206,9 +217,22 @@ class InferenceWorker:
         human_prob,
         probs,
         human_threshold=self.human_threshold,
+        min_margin=self.min_margin,
       )
       return probs, label, conf, human_prob
 
+  def _smooth_label(self, label: str) -> str:
+    if label in ("none", "uncertain", "background", "-"):
+      self.pred_hist.clear()
+      return label
+    self.pred_hist.append(label)
+    if len(self.pred_hist) < max(2, self.smooth_n // 2 + 1):
+      return label
+    # majority vote
+    counts: dict[str, int] = {}
+    for item in self.pred_hist:
+      counts[item] = counts.get(item, 0) + 1
+    return max(counts.items(), key=lambda kv: kv[1])[0]
   def _sync(self):
     if str(self.device).startswith("cuda") and torch.cuda.is_available():
       torch.cuda.synchronize()
@@ -289,6 +313,7 @@ class InferenceWorker:
         can_predict = False
 
       prediction = "-"
+      raw_prediction = "-"
       hierarchy_text = ""
       confidence = 0.0
       human_prob = 0.0
@@ -349,9 +374,13 @@ class InferenceWorker:
 
         prediction = label
         confidence = conf
-        if conf < threshold:
+        raw_prediction = label
+        if conf < threshold or label == "uncertain":
           prediction = "none"
-        hierarchy_text = format_hierarchy(label, conf)
+        if self.require_in_range and radar_on and not in_range:
+          prediction = "none"
+        prediction = self._smooth_label(prediction)
+        hierarchy_text = format_hierarchy(raw_prediction, conf)
 
       radar_status = "off"
       if radar_session is not None:
@@ -364,6 +393,7 @@ class InferenceWorker:
           {
             "status": status,
             "prediction": prediction,
+            "raw_prediction": raw_prediction,
             "hierarchy_text": hierarchy_text,
             "confidence": confidence,
             "human_prob": human_prob,
@@ -431,6 +461,10 @@ def _worker_from_args(args: argparse.Namespace, *, detect_threshold: float, huma
     window_len=args.window,
     detect_threshold=detect_threshold,
     human_threshold=human_threshold,
+    min_margin=args.min_margin,
+    smooth_n=args.smooth_n,
+    require_in_range=not args.no_range_gate,
+    towards_bias=args.towards_bias,
     min_range_m=args.min_range_m,
     max_range_m=args.max_range_m,
   )
@@ -456,6 +490,7 @@ class JetsonGuiApp:
     self.prediction_var = tk.StringVar(value="-")
     self.hierarchy_var = tk.StringVar(value="")
     self.conf_var = tk.StringVar(value="0.00")
+    self.raw_var = tk.StringVar(value="-")
     self.latency_var = tk.StringVar(value="-")
     self.range_var = tk.StringVar(value="-")
     self.radar_status_var = tk.StringVar(value="off")
@@ -511,8 +546,10 @@ class JetsonGuiApp:
       row=0, column=0, sticky="w"
     )
     ttk.Label(pred_box, textvariable=self.hierarchy_var, wraplength=320).grid(row=1, column=0, sticky="w")
-    ttk.Label(pred_box, text=f"Confidence: ").grid(row=2, column=0, sticky="w", pady=(6, 0))
+    ttk.Label(pred_box, text="Confidence:").grid(row=2, column=0, sticky="w", pady=(6, 0))
     ttk.Label(pred_box, textvariable=self.conf_var).grid(row=2, column=1, sticky="w", pady=(6, 0))
+    ttk.Label(pred_box, text="Raw (pre-smooth):").grid(row=3, column=0, sticky="w")
+    ttk.Label(pred_box, textvariable=self.raw_var).grid(row=3, column=1, sticky="w")
 
     ctrl = ttk.LabelFrame(right, text="Controls", padding=8)
     ctrl.grid(row=1, column=0, sticky="ew", pady=(0, 6))
@@ -621,6 +658,7 @@ class JetsonGuiApp:
     self.prediction_var.set(pred)
     self.hierarchy_var.set(str(state.get("hierarchy_text", "")))
     self.conf_var.set(f"{conf:.2f}")
+    self.raw_var.set(str(state.get("raw_prediction", "-")))
     self.latency_var.set(f"{float(state['latency_ms']):.1f} ms  (~{float(state['fps']):.1f} infer/s)")
     target_range = float(state.get("target_range_m", 0.0))
     in_range = bool(state.get("in_range", False))
@@ -666,8 +704,16 @@ def parse_args():
   p.add_argument("--no-radar", action="store_true", help="Camera-only: skip radar SDK")
   p.add_argument("--dual-radar-fuse", choices=("mean", "max"), default="mean")
   p.add_argument("--window", type=int, default=30)
-  p.add_argument("--detect-threshold", type=float, default=0.35)
-  p.add_argument("--human-threshold", type=float, default=0.5)
+  p.add_argument("--detect-threshold", type=float, default=0.55,
+                 help="Suppress prediction if top conf below this (was 0.35; Crossattention uses 0.6)")
+  p.add_argument("--human-threshold", type=float, default=0.55)
+  p.add_argument("--min-margin", type=float, default=0.12,
+                 help="Require top1-top2 prob margin; else treat as uncertain/none")
+  p.add_argument("--smooth-n", type=int, default=5, help="Majority-vote window over recent labels")
+  p.add_argument("--towards-bias", type=float, default=0.35,
+                 help="Downweight walking_towards prior (0=off, ~0.3-0.7 typical)")
+  p.add_argument("--no-range-gate", action="store_true",
+                 help="Allow predictions even when radar peak is outside min/max range")
   p.add_argument("--min-range-m", type=float, default=0.3)
   p.add_argument("--max-range-m", type=float, default=2.5)
   return p.parse_args()

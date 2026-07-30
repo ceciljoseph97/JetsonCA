@@ -84,6 +84,8 @@ def inference_label(
   human_prob: float,
   activity_probs,
   human_threshold: float = 0.5,
+  *,
+  min_margin: float = 0.0,
 ) -> tuple[str, float]:
   import numpy as np
 
@@ -92,6 +94,36 @@ def inference_label(
     bg = next((label for label in labels if is_background_label(label)), "background")
     return bg, float(1.0 - human_prob)
 
-  probs = np.asarray(activity_probs, dtype=np.float32)
-  top_idx = int(np.argmax(probs))
-  return activity_labels[top_idx], float(probs[top_idx])
+  probs = np.asarray(activity_probs, dtype=np.float32).reshape(-1)
+  if probs.size != len(activity_labels):
+    # Full-label softmax (includes background): restrict to activity indices.
+    idx_map = [i for i, label in enumerate(labels) if not is_background_label(label)]
+    if len(idx_map) == len(activity_labels) and probs.size == len(labels):
+      probs = probs[idx_map]
+    else:
+      probs = probs[: len(activity_labels)]
+
+  order = np.argsort(probs)[::-1]
+  top_idx = int(order[0])
+  top_p = float(probs[top_idx])
+  second_p = float(probs[order[1]]) if len(order) > 1 else 0.0
+  if min_margin > 0.0 and (top_p - second_p) < min_margin:
+    return "uncertain", top_p
+  return activity_labels[top_idx], top_p
+
+
+def apply_logit_bias(probs, labels: list[str], bias: dict[str, float] | None):
+  """Re-normalize probs after multiplicative prior correction: p' ∝ p * exp(-bias)."""
+  import numpy as np
+
+  if not bias:
+    return np.asarray(probs, dtype=np.float32)
+  p = np.asarray(probs, dtype=np.float64).copy()
+  activity_labels = [label for label in labels if not is_background_label(label)]
+  for i, label in enumerate(activity_labels[: p.size]):
+    if label in bias:
+      p[i] *= float(np.exp(-float(bias[label])))
+  s = p.sum()
+  if s <= 1e-12:
+    return np.asarray(probs, dtype=np.float32)
+  return (p / s).astype(np.float32)
