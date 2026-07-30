@@ -3,7 +3,14 @@
 
 from __future__ import annotations
 
+# Prefer conda libstdc++ BEFORE any native extension (cv2) imports.
+# reexec=True is required: ld.so only reads LD_LIBRARY_PATH at process start.
+from jetson_env import ensure_conda_lib_path
+
+ensure_conda_lib_path(reexec=True)
+
 import argparse
+import os
 import threading
 import time
 from collections import deque
@@ -14,7 +21,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 import tkinter as tk
-from PIL import Image, ImageTk
+from PIL import Image, ImageDraw, ImageFont, ImageTk
 from tkinter import ttk
 
 from checkpoint import load_checkpoint, preprocess_camera_frame
@@ -27,45 +34,57 @@ from radar_utils import (
   render_radar_panel,
 )
 from range_gating import estimate_peak_range_m, in_recognition_range, profile_metrics
-from realtime_multimodal import CameraStream, get_version_full
+
+
+def _import_camera_stream():
+  """Import CameraStream after LD_LIBRARY_PATH is fixed; give a clear CXXABI hint."""
+  try:
+    from realtime_multimodal import CameraStream, get_version_full
+
+    return CameraStream, get_version_full
+  except ImportError as exc:
+    msg = str(exc)
+    if "CXXABI" in msg or "libstdc++" in msg:
+      prefix = os.environ.get("CONDA_PREFIX", "$CONDA_PREFIX")
+      raise SystemExit(
+        "OpenCV failed to load (libstdc++ / CXXABI mismatch).\n"
+        "On Jetson + conda, run:\n"
+        f"  export LD_LIBRARY_PATH={prefix}/lib:${{LD_LIBRARY_PATH:-}}\n"
+        "  python gui_app.py ...\n"
+        "Or: conda install -c conda-forge 'libstdcxx-ng>=13'\n"
+        f"Original error: {exc}"
+      ) from exc
+    raise
+
+
+CameraStream, get_version_full = _import_camera_stream()
 
 
 def _placeholder_rgb(message: str, width: int = 640, height: int = 360) -> np.ndarray:
-  import cv2
-
-  frame = np.zeros((height, width, 3), dtype=np.uint8)
-  cv2.putText(
-    frame,
-    message,
-    (16, max(32, height // 2)),
-    cv2.FONT_HERSHEY_SIMPLEX,
-    0.6,
-    (200, 200, 200),
-    2,
-    cv2.LINE_AA,
-  )
-  return frame
+  """PIL-only placeholder — avoids cv2 at GUI init."""
+  img = Image.new("RGB", (width, height), (24, 24, 24))
+  draw = ImageDraw.Draw(img)
+  try:
+    font = ImageFont.load_default()
+  except Exception:
+    font = None
+  draw.text((16, max(16, height // 2 - 8)), message[:80], fill=(200, 200, 200), font=font)
+  return np.asarray(img, dtype=np.uint8)
 
 
 def _fit_frame(frame: np.ndarray, size: tuple[int, int], *, letterbox: bool) -> Image.Image:
-  target_w, target_h = size
-  h, w = frame.shape[:2]
+  target_w, target_h = max(1, size[0]), max(1, size[1])
+  img = Image.fromarray(frame)
+  resample = getattr(Image, "Resampling", Image).BILINEAR
   if letterbox:
-    scale = min(target_w / max(w, 1), target_h / max(h, 1))
-    new_w = max(1, int(w * scale))
-    new_h = max(1, int(h * scale))
-    import cv2
-
-    resized = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_AREA)
-    canvas = np.zeros((target_h, target_w, 3), dtype=np.uint8)
-    y0 = (target_h - new_h) // 2
-    x0 = (target_w - new_w) // 2
-    canvas[y0 : y0 + new_h, x0 : x0 + new_w] = resized
-    return Image.fromarray(canvas)
-  import cv2
-
-  return Image.fromarray(cv2.resize(frame, (target_w, target_h), interpolation=cv2.INTER_AREA))
-
+    fitted = Image.new("RGB", (target_w, target_h), (0, 0, 0))
+    copy = img.copy()
+    copy.thumbnail((target_w, target_h), resample)
+    x0 = (target_w - copy.width) // 2
+    y0 = (target_h - copy.height) // 2
+    fitted.paste(copy, (x0, y0))
+    return fitted
+  return img.resize((target_w, target_h), resample)
 
 class InferenceWorker:
   def __init__(

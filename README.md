@@ -82,10 +82,16 @@ python3 benchmark.py --live --device cuda --n-cameras 1 --n-radars 2 \
 
 ## GUI (VNC / local display)
 
-Requires `DISPLAY` (e.g. VNC into the Orin desktop). Lightweight Tk app — camera + radar panels, prediction, no alignment UI.
+Requires `DISPLAY` (e.g. TightVNC into the Orin desktop). Lightweight Tk app — camera + radar panels, prediction, no alignment UI.
 
 ```bash
+# TightVNC session — confirm display (often :1)
+echo $DISPLAY   # should be :1 or :0
+
 export LD_LIBRARY_PATH=$CONDA_PREFIX/lib:${LD_LIBRARY_PATH:-}
+cd ~/AIDisco/JetsonCA
+git pull
+
 python3 gui_app.py --device cuda --camera-device 0
 
 # camera-only (no radar SDK)
@@ -94,6 +100,12 @@ python3 gui_app.py --device cuda --no-radar
 # explicit radar ports (when UUID discovery fails)
 python3 gui_app.py --device cuda \
   --radar1-port /dev/ttyACM0 --radar2-port /dev/ttyACM1
+```
+
+If you see `CXXABI_1.3.15 not found` from OpenCV, conda’s newer `libstdc++` is not first on the library path. The GUI re-execs with `$CONDA_PREFIX/lib` prepended automatically after `git pull`; you can also set `LD_LIBRARY_PATH` as above, or:
+
+```bash
+conda install -c conda-forge "libstdcxx-ng>=13"
 ```
 
 ## TensorRT path (optional)

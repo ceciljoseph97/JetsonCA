@@ -25,12 +25,44 @@ def default_device() -> str:
   return "cpu"
 
 
+def ensure_conda_lib_path(*, reexec: bool = False) -> str | None:
+  """Prefer conda libstdc++ over the older system one (fixes cv2 CXXABI errors).
+
+  Pip opencv on Jetson often needs CXXABI_1.3.15+, while
+  /lib/aarch64-linux-gnu/libstdc++.so.6 from JetPack is older.
+
+  Changing LD_LIBRARY_PATH via os.environ is ignored by the already-running
+  dynamic linker — pass reexec=True (gui entrypoints) to restart the process.
+  """
+  import sys
+
+  prefix = os.environ.get("CONDA_PREFIX")
+  if not prefix:
+    return None
+  lib = str(Path(prefix) / "lib")
+  if not Path(lib).is_dir():
+    return None
+  current = os.environ.get("LD_LIBRARY_PATH", "")
+  parts = [p for p in current.split(":") if p]
+  if lib in parts and parts[0] == lib:
+    return lib
+  # Put conda lib first.
+  parts = [p for p in parts if p != lib]
+  os.environ["LD_LIBRARY_PATH"] = lib + ((":" + ":".join(parts)) if parts else "")
+  if reexec and os.environ.get("_JETSONCA_LIB_REEXEC") != "1":
+    os.environ["_JETSONCA_LIB_REEXEC"] = "1"
+    os.execv(sys.executable, [sys.executable, *sys.argv])
+  return lib
+
+
 def apply_jetson_runtime_tweaks(*, threads: int = 2) -> dict[str, object]:
   """Reduce host-thread / allocator pressure on Nano-class boards."""
+  conda_lib = ensure_conda_lib_path(reexec=False)
   info: dict[str, object] = {
     "is_jetson": is_jetson(),
     "machine": platform.machine(),
     "threads": threads,
+    "conda_lib": conda_lib,
   }
   os.environ.setdefault("OMP_NUM_THREADS", str(threads))
   os.environ.setdefault("MKL_NUM_THREADS", str(threads))
