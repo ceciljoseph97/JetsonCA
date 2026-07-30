@@ -1,5 +1,5 @@
 {
-  "timestamp_utc": "2026-07-30T08:49:29.492952+00:00",
+  "timestamp_utc": "2026-07-30T10:05:51.439856+00:00",
   "benchmark_source": "live",
   "checkpoint": "artifacts/best_multimodal_crossattention.pt",
   "device": "cuda",
@@ -1647,18 +1647,18 @@
     },
     "measured": {
       "deployment_profile": "cam1_radar2",
-      "latency_ms_mean": 50.245603419880354,
-      "latency_ms_p50": 56.98037750016738,
-      "latency_ms_p95": 58.74209920002613,
-      "throughput_fps": 19.90223884154482,
+      "latency_ms_mean": 56.69864171984955,
+      "latency_ms_p50": 57.53333299981023,
+      "latency_ms_p95": 59.76105729951087,
+      "throughput_fps": 17.637106810089797,
       "mmacs_per_inference": 4139.110016,
       "mflops_per_inference": 8278.220032,
       "gflops_per_inference": 8.278220032,
-      "mmacs_per_s_achieved": 82377.5561298624,
-      "mflops_per_s_achieved": 164755.1122597248,
-      "gflops_per_s_achieved": 164.7551122597248,
-      "achieved_mops_per_s": 82377.5561298624,
-      "achieved_gflops_per_s": 164.7551122597248,
+      "mmacs_per_s_achieved": 73001.92545090448,
+      "mflops_per_s_achieved": 146003.85090180897,
+      "gflops_per_s_achieved": 146.003850901809,
+      "achieved_mops_per_s": 73001.92545090448,
+      "achieved_gflops_per_s": 146.003850901809,
       "parameters": 1444613,
       "weight_memory_kb": 5646.56640625,
       "weight_memory_mb": 5.514225006103516,
@@ -1693,6 +1693,43 @@
       "cross_attention_mmacs": "Radar\u2194camera CrossAttentionBlock stack.",
       "jetson_note": "Passing host CUDA latency does not guarantee Nano latency; re-run with --device cuda on the Jetson for platform gate."
     }
+  },
+  "system_monitor": {
+    "enabled": true,
+    "sample_interval_ms": 1000.0,
+    "process_cpu_percent": {
+      "count": 20.0,
+      "mean": 43.8,
+      "max": 87.7
+    },
+    "process_rss_mb": {
+      "count": 20.0,
+      "mean": 948.0392578125,
+      "max": 1162.04296875
+    },
+    "system_cpu_avg_percent": {
+      "count": 20.0,
+      "mean": 8.148333333333335,
+      "max": 15.399999999999999
+    },
+    "system_cpu_peak_percent": {
+      "count": 20.0,
+      "mean": 28.009999999999998,
+      "max": 78.6
+    },
+    "system_ram_used_mb": {
+      "count": 20.0,
+      "mean": 2491.058984375,
+      "max": 2644.4296875
+    },
+    "tegrastats_gr3d_util_percent": {
+      "count": 20.0,
+      "mean": 2.35,
+      "max": 33.0
+    },
+    "tegrastats_emc_util_percent": null,
+    "psutil_samples": 20.0,
+    "tegrastats_samples": 20.0
   },
   "notes": [
     "FLOPs = 2 * MACs (mul-add counted as 2).",
@@ -1738,8 +1775,8 @@
         "frame_rate_hz": 5.0,
         "radar1_uuid": null,
         "radar2_uuid": null,
-        "radar1_port": "/dev/ttyACM0",
-        "radar2_port": "/dev/ttyACM1",
+        "radar1_port": null,
+        "radar2_port": null,
         "mirror_radar2": true,
         "fusion_meta_last": {
           "radar1_live": true,
@@ -1753,53 +1790,53 @@
         "timing": {
           "radar_capture_ms": {
             "count": 89.0,
-            "mean_ms": 116.62663782016955,
-            "std_ms": 62.46474126161195,
-            "min_ms": 8.027640999898722,
-            "max_ms": 178.27706099978968,
-            "p50_ms": 124.13340100010828,
-            "p95_ms": 177.89446679962566,
-            "p99_ms": 178.24607884049328
+            "mean_ms": 134.4074979326987,
+            "std_ms": 39.6741416075449,
+            "min_ms": 8.151148000251851,
+            "max_ms": 188.30853999861574,
+            "p50_ms": 125.57665199892654,
+            "p95_ms": 177.44340960016416,
+            "p99_ms": 179.21983928019478
           },
           "radar_fuse_ms": {
             "count": 89.0,
-            "mean_ms": 0.7771200000022648,
-            "std_ms": 2.640783154114014,
-            "min_ms": 0.14327600001706742,
-            "max_ms": 25.392364999788697,
-            "p50_ms": 0.38580199998250464,
-            "p95_ms": 0.9262890000172773,
-            "p99_ms": 3.8801085195155993
+            "mean_ms": 0.5099471573691078,
+            "std_ms": 0.22094459733869273,
+            "min_ms": 0.14637900130765047,
+            "max_ms": 1.2386600010358961,
+            "p50_ms": 0.39228999958140776,
+            "p95_ms": 0.8285267998871859,
+            "p99_ms": 0.9018039206421253
           },
           "camera_fetch_preprocess_ms": {
             "count": 89.0,
-            "mean_ms": 15.139195595468898,
-            "std_ms": 5.517797953143865,
-            "min_ms": 7.625809999808553,
-            "max_ms": 29.490604999409697,
-            "p50_ms": 13.975447999655444,
-            "p95_ms": 22.084755999821937,
-            "p99_ms": 24.829063719989815
+            "mean_ms": 17.130953191053266,
+            "std_ms": 4.905427995376805,
+            "min_ms": 7.651531999727013,
+            "max_ms": 32.20136699928844,
+            "p50_ms": 14.708955999594764,
+            "p95_ms": 24.431868999818107,
+            "p99_ms": 27.56695963944369
           },
           "inference_ms": {
             "count": 50.0,
-            "mean_ms": 50.245603419880354,
-            "std_ms": 10.484583727766971,
-            "min_ms": 22.3611820001679,
-            "max_ms": 59.894574000281864,
-            "p50_ms": 56.98037750016738,
-            "p95_ms": 58.74209920002613,
-            "p99_ms": 59.55927190017974
+            "mean_ms": 56.69864171984955,
+            "std_ms": 2.6519592850275657,
+            "min_ms": 49.95782500009227,
+            "max_ms": 60.4296780002187,
+            "p50_ms": 57.53333299981023,
+            "p95_ms": 59.76105729951087,
+            "p99_ms": 60.1393128199561
           },
           "total_loop_ms": {
             "count": 50.0,
-            "mean_ms": 168.28819168000337,
-            "std_ms": 61.703950384214345,
-            "min_ms": 40.625914999509405,
-            "max_ms": 218.42352599924197,
-            "p50_ms": 200.0262900000962,
-            "p95_ms": 206.86848449995523,
-            "p99_ms": 214.88074857953507
+            "mean_ms": 200.36754693992407,
+            "std_ms": 4.193589934104271,
+            "min_ms": 189.9359409999306,
+            "max_ms": 208.33534200028225,
+            "p50_ms": 201.29394050036353,
+            "p95_ms": 205.70401369923275,
+            "p99_ms": 207.50390901985156
           }
         },
         "notes": [
@@ -3482,20 +3519,20 @@
       "latency": {
         "runs": 50.0,
         "warmup": 10.0,
-        "latency_ms_mean": 50.245603419880354,
-        "latency_ms_std": 10.484583727766971,
-        "latency_ms_min": 22.3611820001679,
-        "latency_ms_max": 59.894574000281864,
-        "latency_ms_p50": 56.98037750016738,
-        "latency_ms_p95": 58.74209920002613,
-        "latency_ms_p99": 59.55927190017974,
-        "throughput_fps": 19.90223884154482
+        "latency_ms_mean": 56.69864171984955,
+        "latency_ms_std": 2.6519592850275657,
+        "latency_ms_min": 49.95782500009227,
+        "latency_ms_max": 60.4296780002187,
+        "latency_ms_p50": 57.53333299981023,
+        "latency_ms_p95": 59.76105729951087,
+        "latency_ms_p99": 60.1393128199561,
+        "throughput_fps": 17.637106810089797
       },
       "performance": {
-        "achieved_mops_per_s": 82377.5561298624,
-        "achieved_gflops_per_s": 164.7551122597248,
-        "conv2d_mops_per_s": 81658.15356446903,
-        "temporal_transformer_mops_per_s": 239.36183827859858,
+        "achieved_mops_per_s": 73001.92545090448,
+        "achieved_gflops_per_s": 146.003850901809,
+        "conv2d_mops_per_s": 72364.40019626783,
+        "temporal_transformer_mops_per_s": 212.11936715213278,
         "note": "achieved_* = theoretical ops / measured mean inference latency on live data windows"
       }
     }
