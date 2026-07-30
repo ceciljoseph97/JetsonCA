@@ -1,0 +1,3475 @@
+{
+  "timestamp_utc": "2026-07-29T16:17:31.462153+00:00",
+  "benchmark_source": "live",
+  "checkpoint": "artifacts/best_multimodal_crossattention.pt",
+  "device": "cuda",
+  "platform": {
+    "hostname": "cj-desktop",
+    "os": "Linux-5.15.148-tegra-aarch64-with-glibc2.35",
+    "python": "3.10.20",
+    "torch": "2.10.0",
+    "device": "cuda",
+    "cuda_available": true,
+    "machine": "aarch64",
+    "processor": "aarch64",
+    "gpu_name": "Orin",
+    "gpu_total_memory_mb": 7619.9,
+    "jetson_like": true
+  },
+  "deployment": {
+    "profile": "cam1_radar_off",
+    "n_cameras": 1,
+    "n_radars": 0,
+    "note": "Live camera-only: radar zeros + radar_present=False (no radar SDK)."
+  },
+  "labels": [
+    "crossing",
+    "walking_away",
+    "walking_towards"
+  ],
+  "config": {
+    "model_dim": 128,
+    "num_heads": 4,
+    "num_layers": 2,
+    "temporal_mode": "transformer",
+    "dropout": 0.1,
+    "modality_dropout": 0.35,
+    "image_size": 112,
+    "num_activity_classes": 3,
+    "enable_human_head": true,
+    "min_range_m": 0.3,
+    "max_range_m": 2.5,
+    "dual_radar_fuse": "mean"
+  },
+  "parameters": {
+    "total": 1444613,
+    "trainable": 1444613
+  },
+  "parameters_millions": 1.4446,
+  "parameters_by_block": {
+    "other": {
+      "parameters": 16640.0,
+      "weight_kb": 65.0,
+      "weight_mb": 0.0634765625
+    },
+    "conv_radar": {
+      "parameters": 93696.0,
+      "weight_kb": 366.0,
+      "weight_mb": 0.357421875
+    },
+    "conv_camera": {
+      "parameters": 93696.0,
+      "weight_kb": 366.0,
+      "weight_mb": 0.357421875
+    },
+    "temporal_radar": {
+      "parameters": 198272.0,
+      "weight_kb": 774.5,
+      "weight_mb": 0.75634765625
+    },
+    "temporal_camera": {
+      "parameters": 198272.0,
+      "weight_kb": 774.5,
+      "weight_mb": 0.75634765625
+    },
+    "cross_attention": {
+      "parameters": 793088.0,
+      "weight_kb": 3098.0,
+      "weight_mb": 3.025390625
+    },
+    "head": {
+      "parameters": 50949.0,
+      "weight_kb": 199.01953125,
+      "weight_mb": 0.19435501098632812
+    }
+  },
+  "weight_memory": {
+    "bytes": 5782084.0,
+    "kb": 5646.56640625,
+    "mb": 5.514225006103516
+  },
+  "buffer_memory_estimate": {
+    "bytes": 5621760.0,
+    "kb": 5490.0,
+    "mb": 5.361328125,
+    "n_cameras": 1.0,
+    "n_radars": 2.0,
+    "note": "input window buffers only (not full activation peak)"
+  },
+  "key_meanings": {
+    "parameters_millions": "Total parameter count in millions.",
+    "weight_memory": "Parameter + registered buffer memory footprint of the model in RAM/VRAM.",
+    "buffer_memory_estimate": "Approximate input-window buffer footprint for deployment, not peak activations.",
+    "operation_specs": "Per-block theoretical operation breakdown for the primary mode.",
+    "profiles": "Per-mode benchmark results; usually contains both, radar_only, and/or camera_only.",
+    "total_macs": "Total multiply-accumulate operations for one forward pass.",
+    "total_mops": "Total MACs divided by 1e6. Despite the name, this is a count per inference, not per second.",
+    "total_flops": "Total floating-point operations for one forward pass, using FLOPs = 2 * MACs.",
+    "total_gflops": "Total FLOPs divided by 1e9 for one forward pass.",
+    "latency_ms_mean": "Average forward-pass latency in milliseconds over measured runs.",
+    "latency_ms_p50": "Median forward-pass latency in milliseconds.",
+    "latency_ms_p95": "95th percentile forward-pass latency in milliseconds.",
+    "throughput_fps": "Approximate inferences per second, computed as 1000 / mean latency_ms.",
+    "achieved_mops_per_s": "Theoretical MAC count divided by measured mean latency; effective achieved throughput in MOPS/s.",
+    "achieved_gflops_per_s": "Theoretical FLOP count divided by measured mean latency; effective achieved throughput in GFLOPs/s.",
+    "conv_share": "Fraction of total theoretical compute spent in convolution layers.",
+    "conv_mmacs": "Millions of MACs spent in convolution layers.",
+    "temporal_transformer_mmacs": "Millions of MACs spent in temporal self-attention + feed-forward blocks.",
+    "cross_attention_mmacs": "Millions of MACs spent in radar-camera cross-attention blocks.",
+    "mmacs_per_inference": "Total millions of MACs for one forward pass.",
+    "gflops_per_inference": "Total billions of FLOPs for one forward pass.",
+    "kpi.pass": "Boolean pass/fail results against the AI-DISCO deployment thresholds.",
+    "kpi.pass_count": "Number of KPI checks passed."
+  },
+  "operation_specs": {
+    "conv": {
+      "macs": 4102963200,
+      "flops": 8205926400,
+      "mops": 4102.9632,
+      "mmacs": 4102.9632,
+      "mflops": 8205.9264,
+      "gflops": 8.2059264,
+      "ops": 6,
+      "macs_by_op": {
+        "conv2d": 4102963200
+      },
+      "mops_by_op": {
+        "conv2d": 4102.9632
+      },
+      "layers": [
+        {
+          "op": "conv2d",
+          "block": "conv_radar",
+          "name": "radar_encoder.net.0",
+          "in_shape": [
+            30,
+            3,
+            32,
+            32
+          ],
+          "out_shape": [
+            30,
+            32,
+            32,
+            32
+          ],
+          "kernel": [
+            3,
+            3
+          ],
+          "macs": 26542080,
+          "flops": 53084160
+        },
+        {
+          "op": "conv2d",
+          "block": "conv_radar",
+          "name": "radar_encoder.net.4",
+          "in_shape": [
+            30,
+            32,
+            16,
+            16
+          ],
+          "out_shape": [
+            30,
+            64,
+            16,
+            16
+          ],
+          "kernel": [
+            3,
+            3
+          ],
+          "macs": 141557760,
+          "flops": 283115520
+        },
+        {
+          "op": "conv2d",
+          "block": "conv_radar",
+          "name": "radar_encoder.net.8",
+          "in_shape": [
+            30,
+            64,
+            8,
+            8
+          ],
+          "out_shape": [
+            30,
+            128,
+            8,
+            8
+          ],
+          "kernel": [
+            3,
+            3
+          ],
+          "macs": 141557760,
+          "flops": 283115520
+        },
+        {
+          "op": "conv2d",
+          "block": "conv_camera",
+          "name": "camera_encoder.net.0",
+          "in_shape": [
+            30,
+            3,
+            112,
+            112
+          ],
+          "out_shape": [
+            30,
+            32,
+            112,
+            112
+          ],
+          "kernel": [
+            3,
+            3
+          ],
+          "macs": 325140480,
+          "flops": 650280960
+        },
+        {
+          "op": "conv2d",
+          "block": "conv_camera",
+          "name": "camera_encoder.net.4",
+          "in_shape": [
+            30,
+            32,
+            56,
+            56
+          ],
+          "out_shape": [
+            30,
+            64,
+            56,
+            56
+          ],
+          "kernel": [
+            3,
+            3
+          ],
+          "macs": 1734082560,
+          "flops": 3468165120
+        },
+        {
+          "op": "conv2d",
+          "block": "conv_camera",
+          "name": "camera_encoder.net.8",
+          "in_shape": [
+            30,
+            64,
+            28,
+            28
+          ],
+          "out_shape": [
+            30,
+            128,
+            28,
+            28
+          ],
+          "kernel": [
+            3,
+            3
+          ],
+          "macs": 1734082560,
+          "flops": 3468165120
+        }
+      ],
+      "share_of_total": 0.9912670076754974,
+      "description": "Frame CNN encoders (radar_encoder + camera_encoder Conv2d)",
+      "by_stream": {
+        "radar": {
+          "macs": 309657600,
+          "flops": 619315200,
+          "mops": 309.6576,
+          "mmacs": 309.6576,
+          "mflops": 619.3152,
+          "gflops": 0.6193152,
+          "ops": 3,
+          "macs_by_op": {
+            "conv2d": 309657600
+          },
+          "mops_by_op": {
+            "conv2d": 309.6576
+          },
+          "layers": [
+            {
+              "op": "conv2d",
+              "block": "conv_radar",
+              "name": "radar_encoder.net.0",
+              "in_shape": [
+                30,
+                3,
+                32,
+                32
+              ],
+              "out_shape": [
+                30,
+                32,
+                32,
+                32
+              ],
+              "kernel": [
+                3,
+                3
+              ],
+              "macs": 26542080,
+              "flops": 53084160
+            },
+            {
+              "op": "conv2d",
+              "block": "conv_radar",
+              "name": "radar_encoder.net.4",
+              "in_shape": [
+                30,
+                32,
+                16,
+                16
+              ],
+              "out_shape": [
+                30,
+                64,
+                16,
+                16
+              ],
+              "kernel": [
+                3,
+                3
+              ],
+              "macs": 141557760,
+              "flops": 283115520
+            },
+            {
+              "op": "conv2d",
+              "block": "conv_radar",
+              "name": "radar_encoder.net.8",
+              "in_shape": [
+                30,
+                64,
+                8,
+                8
+              ],
+              "out_shape": [
+                30,
+                128,
+                8,
+                8
+              ],
+              "kernel": [
+                3,
+                3
+              ],
+              "macs": 141557760,
+              "flops": 283115520
+            }
+          ]
+        },
+        "camera": {
+          "macs": 3793305600,
+          "flops": 7586611200,
+          "mops": 3793.3056,
+          "mmacs": 3793.3056,
+          "mflops": 7586.6112,
+          "gflops": 7.5866112,
+          "ops": 3,
+          "macs_by_op": {
+            "conv2d": 3793305600
+          },
+          "mops_by_op": {
+            "conv2d": 3793.3056
+          },
+          "layers": [
+            {
+              "op": "conv2d",
+              "block": "conv_camera",
+              "name": "camera_encoder.net.0",
+              "in_shape": [
+                30,
+                3,
+                112,
+                112
+              ],
+              "out_shape": [
+                30,
+                32,
+                112,
+                112
+              ],
+              "kernel": [
+                3,
+                3
+              ],
+              "macs": 325140480,
+              "flops": 650280960
+            },
+            {
+              "op": "conv2d",
+              "block": "conv_camera",
+              "name": "camera_encoder.net.4",
+              "in_shape": [
+                30,
+                32,
+                56,
+                56
+              ],
+              "out_shape": [
+                30,
+                64,
+                56,
+                56
+              ],
+              "kernel": [
+                3,
+                3
+              ],
+              "macs": 1734082560,
+              "flops": 3468165120
+            },
+            {
+              "op": "conv2d",
+              "block": "conv_camera",
+              "name": "camera_encoder.net.8",
+              "in_shape": [
+                30,
+                64,
+                28,
+                28
+              ],
+              "out_shape": [
+                30,
+                128,
+                28,
+                28
+              ],
+              "kernel": [
+                3,
+                3
+              ],
+              "macs": 1734082560,
+              "flops": 3468165120
+            }
+          ]
+        }
+      }
+    },
+    "temporal_transformer": {
+      "macs": 12026880,
+      "flops": 24053760,
+      "mops": 12.02688,
+      "mmacs": 12.02688,
+      "mflops": 24.05376,
+      "gflops": 0.02405376,
+      "ops": 6,
+      "macs_by_op": {
+        "multihead_attention": 4162560,
+        "linear": 7864320
+      },
+      "mops_by_op": {
+        "multihead_attention": 4.16256,
+        "linear": 7.86432
+      },
+      "layers": [
+        {
+          "op": "multihead_attention",
+          "block": "temporal_radar",
+          "name": "radar_temporal.net.layers.0.self_attn",
+          "in_shape": [
+            1,
+            30,
+            128
+          ],
+          "macs": 2081280,
+          "flops": 4162560
+        },
+        {
+          "op": "linear",
+          "block": "temporal_radar",
+          "name": "radar_temporal.net.layers.0.linear1",
+          "in_shape": [
+            1,
+            30,
+            128
+          ],
+          "out_shape": [
+            1,
+            30,
+            512
+          ],
+          "macs": 1966080,
+          "flops": 3932160
+        },
+        {
+          "op": "linear",
+          "block": "temporal_radar",
+          "name": "radar_temporal.net.layers.0.linear2",
+          "in_shape": [
+            1,
+            30,
+            512
+          ],
+          "out_shape": [
+            1,
+            30,
+            128
+          ],
+          "macs": 1966080,
+          "flops": 3932160
+        },
+        {
+          "op": "multihead_attention",
+          "block": "temporal_camera",
+          "name": "camera_temporal.net.layers.0.self_attn",
+          "in_shape": [
+            1,
+            30,
+            128
+          ],
+          "macs": 2081280,
+          "flops": 4162560
+        },
+        {
+          "op": "linear",
+          "block": "temporal_camera",
+          "name": "camera_temporal.net.layers.0.linear1",
+          "in_shape": [
+            1,
+            30,
+            128
+          ],
+          "out_shape": [
+            1,
+            30,
+            512
+          ],
+          "macs": 1966080,
+          "flops": 3932160
+        },
+        {
+          "op": "linear",
+          "block": "temporal_camera",
+          "name": "camera_temporal.net.layers.0.linear2",
+          "in_shape": [
+            1,
+            30,
+            512
+          ],
+          "out_shape": [
+            1,
+            30,
+            128
+          ],
+          "macs": 1966080,
+          "flops": 3932160
+        }
+      ],
+      "share_of_total": 0.002905668115490845,
+      "description": "Per-modality TemporalEncoder (TransformerEncoderLayer: self-attn MHA + FFN linears)",
+      "by_stream": {
+        "radar": {
+          "macs": 6013440,
+          "flops": 12026880,
+          "mops": 6.01344,
+          "mmacs": 6.01344,
+          "mflops": 12.02688,
+          "gflops": 0.01202688,
+          "ops": 3,
+          "macs_by_op": {
+            "multihead_attention": 2081280,
+            "linear": 3932160
+          },
+          "mops_by_op": {
+            "multihead_attention": 2.08128,
+            "linear": 3.93216
+          },
+          "layers": [
+            {
+              "op": "multihead_attention",
+              "block": "temporal_radar",
+              "name": "radar_temporal.net.layers.0.self_attn",
+              "in_shape": [
+                1,
+                30,
+                128
+              ],
+              "macs": 2081280,
+              "flops": 4162560
+            },
+            {
+              "op": "linear",
+              "block": "temporal_radar",
+              "name": "radar_temporal.net.layers.0.linear1",
+              "in_shape": [
+                1,
+                30,
+                128
+              ],
+              "out_shape": [
+                1,
+                30,
+                512
+              ],
+              "macs": 1966080,
+              "flops": 3932160
+            },
+            {
+              "op": "linear",
+              "block": "temporal_radar",
+              "name": "radar_temporal.net.layers.0.linear2",
+              "in_shape": [
+                1,
+                30,
+                512
+              ],
+              "out_shape": [
+                1,
+                30,
+                128
+              ],
+              "macs": 1966080,
+              "flops": 3932160
+            }
+          ]
+        },
+        "camera": {
+          "macs": 6013440,
+          "flops": 12026880,
+          "mops": 6.01344,
+          "mmacs": 6.01344,
+          "mflops": 12.02688,
+          "gflops": 0.01202688,
+          "ops": 3,
+          "macs_by_op": {
+            "multihead_attention": 2081280,
+            "linear": 3932160
+          },
+          "mops_by_op": {
+            "multihead_attention": 2.08128,
+            "linear": 3.93216
+          },
+          "layers": [
+            {
+              "op": "multihead_attention",
+              "block": "temporal_camera",
+              "name": "camera_temporal.net.layers.0.self_attn",
+              "in_shape": [
+                1,
+                30,
+                128
+              ],
+              "macs": 2081280,
+              "flops": 4162560
+            },
+            {
+              "op": "linear",
+              "block": "temporal_camera",
+              "name": "camera_temporal.net.layers.0.linear1",
+              "in_shape": [
+                1,
+                30,
+                128
+              ],
+              "out_shape": [
+                1,
+                30,
+                512
+              ],
+              "macs": 1966080,
+              "flops": 3932160
+            },
+            {
+              "op": "linear",
+              "block": "temporal_camera",
+              "name": "camera_temporal.net.layers.0.linear2",
+              "in_shape": [
+                1,
+                30,
+                512
+              ],
+              "out_shape": [
+                1,
+                30,
+                128
+              ],
+              "macs": 1966080,
+              "flops": 3932160
+            }
+          ]
+        }
+      },
+      "attn_macs": 4162560,
+      "ffn_macs": 7864320
+    },
+    "cross_attention": {
+      "macs": 24053760,
+      "flops": 48107520,
+      "mops": 24.05376,
+      "mmacs": 24.05376,
+      "mflops": 48.10752,
+      "gflops": 0.04810752,
+      "ops": 12,
+      "macs_by_op": {
+        "multihead_attention": 8325120,
+        "linear": 15728640
+      },
+      "mops_by_op": {
+        "multihead_attention": 8.32512,
+        "linear": 15.72864
+      },
+      "layers": [
+        {
+          "op": "multihead_attention",
+          "block": "cross_attention",
+          "name": "layers.0.radar_to_camera",
+          "in_shape": [
+            1,
+            30,
+            128
+          ],
+          "macs": 2081280,
+          "flops": 4162560
+        },
+        {
+          "op": "multihead_attention",
+          "block": "cross_attention",
+          "name": "layers.0.camera_to_radar",
+          "in_shape": [
+            1,
+            30,
+            128
+          ],
+          "macs": 2081280,
+          "flops": 4162560
+        },
+        {
+          "op": "linear",
+          "block": "cross_attention",
+          "name": "layers.0.radar_ffn.net.1",
+          "in_shape": [
+            1,
+            30,
+            128
+          ],
+          "out_shape": [
+            1,
+            30,
+            512
+          ],
+          "macs": 1966080,
+          "flops": 3932160
+        },
+        {
+          "op": "linear",
+          "block": "cross_attention",
+          "name": "layers.0.radar_ffn.net.4",
+          "in_shape": [
+            1,
+            30,
+            512
+          ],
+          "out_shape": [
+            1,
+            30,
+            128
+          ],
+          "macs": 1966080,
+          "flops": 3932160
+        },
+        {
+          "op": "linear",
+          "block": "cross_attention",
+          "name": "layers.0.camera_ffn.net.1",
+          "in_shape": [
+            1,
+            30,
+            128
+          ],
+          "out_shape": [
+            1,
+            30,
+            512
+          ],
+          "macs": 1966080,
+          "flops": 3932160
+        },
+        {
+          "op": "linear",
+          "block": "cross_attention",
+          "name": "layers.0.camera_ffn.net.4",
+          "in_shape": [
+            1,
+            30,
+            512
+          ],
+          "out_shape": [
+            1,
+            30,
+            128
+          ],
+          "macs": 1966080,
+          "flops": 3932160
+        },
+        {
+          "op": "multihead_attention",
+          "block": "cross_attention",
+          "name": "layers.1.radar_to_camera",
+          "in_shape": [
+            1,
+            30,
+            128
+          ],
+          "macs": 2081280,
+          "flops": 4162560
+        },
+        {
+          "op": "multihead_attention",
+          "block": "cross_attention",
+          "name": "layers.1.camera_to_radar",
+          "in_shape": [
+            1,
+            30,
+            128
+          ],
+          "macs": 2081280,
+          "flops": 4162560
+        },
+        {
+          "op": "linear",
+          "block": "cross_attention",
+          "name": "layers.1.radar_ffn.net.1",
+          "in_shape": [
+            1,
+            30,
+            128
+          ],
+          "out_shape": [
+            1,
+            30,
+            512
+          ],
+          "macs": 1966080,
+          "flops": 3932160
+        },
+        {
+          "op": "linear",
+          "block": "cross_attention",
+          "name": "layers.1.radar_ffn.net.4",
+          "in_shape": [
+            1,
+            30,
+            512
+          ],
+          "out_shape": [
+            1,
+            30,
+            128
+          ],
+          "macs": 1966080,
+          "flops": 3932160
+        },
+        {
+          "op": "linear",
+          "block": "cross_attention",
+          "name": "layers.1.camera_ffn.net.1",
+          "in_shape": [
+            1,
+            30,
+            128
+          ],
+          "out_shape": [
+            1,
+            30,
+            512
+          ],
+          "macs": 1966080,
+          "flops": 3932160
+        },
+        {
+          "op": "linear",
+          "block": "cross_attention",
+          "name": "layers.1.camera_ffn.net.4",
+          "in_shape": [
+            1,
+            30,
+            512
+          ],
+          "out_shape": [
+            1,
+            30,
+            128
+          ],
+          "macs": 1966080,
+          "flops": 3932160
+        }
+      ],
+      "share_of_total": 0.00581133623098169,
+      "description": "CrossAttentionBlock stack (radar\u2194camera MHA + FFN)"
+    },
+    "head": {
+      "macs": 66176,
+      "flops": 132352,
+      "mops": 0.066176,
+      "mmacs": 0.066176,
+      "mflops": 0.132352,
+      "gflops": 0.000132352,
+      "ops": 6,
+      "macs_by_op": {
+        "linear": 66176
+      },
+      "mops_by_op": {
+        "linear": 0.066176
+      },
+      "layers": [
+        {
+          "op": "linear",
+          "block": "head",
+          "name": "shared_proj.1",
+          "in_shape": [
+            1,
+            128
+          ],
+          "out_shape": [
+            1,
+            128
+          ],
+          "macs": 16384,
+          "flops": 32768
+        },
+        {
+          "op": "linear",
+          "block": "head",
+          "name": "shared_proj.1",
+          "in_shape": [
+            1,
+            128
+          ],
+          "out_shape": [
+            1,
+            128
+          ],
+          "macs": 16384,
+          "flops": 32768
+        },
+        {
+          "op": "linear",
+          "block": "head",
+          "name": "activity_classifier.1",
+          "in_shape": [
+            1,
+            128
+          ],
+          "out_shape": [
+            1,
+            128
+          ],
+          "macs": 16384,
+          "flops": 32768
+        },
+        {
+          "op": "linear",
+          "block": "head",
+          "name": "activity_classifier.4",
+          "in_shape": [
+            1,
+            128
+          ],
+          "out_shape": [
+            1,
+            3
+          ],
+          "macs": 384,
+          "flops": 768
+        },
+        {
+          "op": "linear",
+          "block": "head",
+          "name": "human_classifier.1",
+          "in_shape": [
+            1,
+            128
+          ],
+          "out_shape": [
+            1,
+            128
+          ],
+          "macs": 16384,
+          "flops": 32768
+        },
+        {
+          "op": "linear",
+          "block": "head",
+          "name": "human_classifier.4",
+          "in_shape": [
+            1,
+            128
+          ],
+          "out_shape": [
+            1,
+            2
+          ],
+          "macs": 256,
+          "flops": 512
+        }
+      ],
+      "share_of_total": 1.5987978030106075e-05,
+      "description": "shared_proj + activity/human classifiers"
+    },
+    "by_block": {
+      "conv_radar": {
+        "macs": 309657600,
+        "flops": 619315200,
+        "mops": 309.6576,
+        "mmacs": 309.6576,
+        "mflops": 619.3152,
+        "gflops": 0.6193152,
+        "ops": 3,
+        "macs_by_op": {
+          "conv2d": 309657600
+        },
+        "mops_by_op": {
+          "conv2d": 309.6576
+        },
+        "layers": [
+          {
+            "op": "conv2d",
+            "block": "conv_radar",
+            "name": "radar_encoder.net.0",
+            "in_shape": [
+              30,
+              3,
+              32,
+              32
+            ],
+            "out_shape": [
+              30,
+              32,
+              32,
+              32
+            ],
+            "kernel": [
+              3,
+              3
+            ],
+            "macs": 26542080,
+            "flops": 53084160
+          },
+          {
+            "op": "conv2d",
+            "block": "conv_radar",
+            "name": "radar_encoder.net.4",
+            "in_shape": [
+              30,
+              32,
+              16,
+              16
+            ],
+            "out_shape": [
+              30,
+              64,
+              16,
+              16
+            ],
+            "kernel": [
+              3,
+              3
+            ],
+            "macs": 141557760,
+            "flops": 283115520
+          },
+          {
+            "op": "conv2d",
+            "block": "conv_radar",
+            "name": "radar_encoder.net.8",
+            "in_shape": [
+              30,
+              64,
+              8,
+              8
+            ],
+            "out_shape": [
+              30,
+              128,
+              8,
+              8
+            ],
+            "kernel": [
+              3,
+              3
+            ],
+            "macs": 141557760,
+            "flops": 283115520
+          }
+        ]
+      },
+      "conv_camera": {
+        "macs": 3793305600,
+        "flops": 7586611200,
+        "mops": 3793.3056,
+        "mmacs": 3793.3056,
+        "mflops": 7586.6112,
+        "gflops": 7.5866112,
+        "ops": 3,
+        "macs_by_op": {
+          "conv2d": 3793305600
+        },
+        "mops_by_op": {
+          "conv2d": 3793.3056
+        },
+        "layers": [
+          {
+            "op": "conv2d",
+            "block": "conv_camera",
+            "name": "camera_encoder.net.0",
+            "in_shape": [
+              30,
+              3,
+              112,
+              112
+            ],
+            "out_shape": [
+              30,
+              32,
+              112,
+              112
+            ],
+            "kernel": [
+              3,
+              3
+            ],
+            "macs": 325140480,
+            "flops": 650280960
+          },
+          {
+            "op": "conv2d",
+            "block": "conv_camera",
+            "name": "camera_encoder.net.4",
+            "in_shape": [
+              30,
+              32,
+              56,
+              56
+            ],
+            "out_shape": [
+              30,
+              64,
+              56,
+              56
+            ],
+            "kernel": [
+              3,
+              3
+            ],
+            "macs": 1734082560,
+            "flops": 3468165120
+          },
+          {
+            "op": "conv2d",
+            "block": "conv_camera",
+            "name": "camera_encoder.net.8",
+            "in_shape": [
+              30,
+              64,
+              28,
+              28
+            ],
+            "out_shape": [
+              30,
+              128,
+              28,
+              28
+            ],
+            "kernel": [
+              3,
+              3
+            ],
+            "macs": 1734082560,
+            "flops": 3468165120
+          }
+        ]
+      },
+      "temporal_radar": {
+        "macs": 6013440,
+        "flops": 12026880,
+        "mops": 6.01344,
+        "mmacs": 6.01344,
+        "mflops": 12.02688,
+        "gflops": 0.01202688,
+        "ops": 3,
+        "macs_by_op": {
+          "multihead_attention": 2081280,
+          "linear": 3932160
+        },
+        "mops_by_op": {
+          "multihead_attention": 2.08128,
+          "linear": 3.93216
+        },
+        "layers": [
+          {
+            "op": "multihead_attention",
+            "block": "temporal_radar",
+            "name": "radar_temporal.net.layers.0.self_attn",
+            "in_shape": [
+              1,
+              30,
+              128
+            ],
+            "macs": 2081280,
+            "flops": 4162560
+          },
+          {
+            "op": "linear",
+            "block": "temporal_radar",
+            "name": "radar_temporal.net.layers.0.linear1",
+            "in_shape": [
+              1,
+              30,
+              128
+            ],
+            "out_shape": [
+              1,
+              30,
+              512
+            ],
+            "macs": 1966080,
+            "flops": 3932160
+          },
+          {
+            "op": "linear",
+            "block": "temporal_radar",
+            "name": "radar_temporal.net.layers.0.linear2",
+            "in_shape": [
+              1,
+              30,
+              512
+            ],
+            "out_shape": [
+              1,
+              30,
+              128
+            ],
+            "macs": 1966080,
+            "flops": 3932160
+          }
+        ]
+      },
+      "temporal_camera": {
+        "macs": 6013440,
+        "flops": 12026880,
+        "mops": 6.01344,
+        "mmacs": 6.01344,
+        "mflops": 12.02688,
+        "gflops": 0.01202688,
+        "ops": 3,
+        "macs_by_op": {
+          "multihead_attention": 2081280,
+          "linear": 3932160
+        },
+        "mops_by_op": {
+          "multihead_attention": 2.08128,
+          "linear": 3.93216
+        },
+        "layers": [
+          {
+            "op": "multihead_attention",
+            "block": "temporal_camera",
+            "name": "camera_temporal.net.layers.0.self_attn",
+            "in_shape": [
+              1,
+              30,
+              128
+            ],
+            "macs": 2081280,
+            "flops": 4162560
+          },
+          {
+            "op": "linear",
+            "block": "temporal_camera",
+            "name": "camera_temporal.net.layers.0.linear1",
+            "in_shape": [
+              1,
+              30,
+              128
+            ],
+            "out_shape": [
+              1,
+              30,
+              512
+            ],
+            "macs": 1966080,
+            "flops": 3932160
+          },
+          {
+            "op": "linear",
+            "block": "temporal_camera",
+            "name": "camera_temporal.net.layers.0.linear2",
+            "in_shape": [
+              1,
+              30,
+              512
+            ],
+            "out_shape": [
+              1,
+              30,
+              128
+            ],
+            "macs": 1966080,
+            "flops": 3932160
+          }
+        ]
+      },
+      "cross_attention": {
+        "macs": 24053760,
+        "flops": 48107520,
+        "mops": 24.05376,
+        "mmacs": 24.05376,
+        "mflops": 48.10752,
+        "gflops": 0.04810752,
+        "ops": 12,
+        "macs_by_op": {
+          "multihead_attention": 8325120,
+          "linear": 15728640
+        },
+        "mops_by_op": {
+          "multihead_attention": 8.32512,
+          "linear": 15.72864
+        },
+        "layers": [
+          {
+            "op": "multihead_attention",
+            "block": "cross_attention",
+            "name": "layers.0.radar_to_camera",
+            "in_shape": [
+              1,
+              30,
+              128
+            ],
+            "macs": 2081280,
+            "flops": 4162560
+          },
+          {
+            "op": "multihead_attention",
+            "block": "cross_attention",
+            "name": "layers.0.camera_to_radar",
+            "in_shape": [
+              1,
+              30,
+              128
+            ],
+            "macs": 2081280,
+            "flops": 4162560
+          },
+          {
+            "op": "linear",
+            "block": "cross_attention",
+            "name": "layers.0.radar_ffn.net.1",
+            "in_shape": [
+              1,
+              30,
+              128
+            ],
+            "out_shape": [
+              1,
+              30,
+              512
+            ],
+            "macs": 1966080,
+            "flops": 3932160
+          },
+          {
+            "op": "linear",
+            "block": "cross_attention",
+            "name": "layers.0.radar_ffn.net.4",
+            "in_shape": [
+              1,
+              30,
+              512
+            ],
+            "out_shape": [
+              1,
+              30,
+              128
+            ],
+            "macs": 1966080,
+            "flops": 3932160
+          },
+          {
+            "op": "linear",
+            "block": "cross_attention",
+            "name": "layers.0.camera_ffn.net.1",
+            "in_shape": [
+              1,
+              30,
+              128
+            ],
+            "out_shape": [
+              1,
+              30,
+              512
+            ],
+            "macs": 1966080,
+            "flops": 3932160
+          },
+          {
+            "op": "linear",
+            "block": "cross_attention",
+            "name": "layers.0.camera_ffn.net.4",
+            "in_shape": [
+              1,
+              30,
+              512
+            ],
+            "out_shape": [
+              1,
+              30,
+              128
+            ],
+            "macs": 1966080,
+            "flops": 3932160
+          },
+          {
+            "op": "multihead_attention",
+            "block": "cross_attention",
+            "name": "layers.1.radar_to_camera",
+            "in_shape": [
+              1,
+              30,
+              128
+            ],
+            "macs": 2081280,
+            "flops": 4162560
+          },
+          {
+            "op": "multihead_attention",
+            "block": "cross_attention",
+            "name": "layers.1.camera_to_radar",
+            "in_shape": [
+              1,
+              30,
+              128
+            ],
+            "macs": 2081280,
+            "flops": 4162560
+          },
+          {
+            "op": "linear",
+            "block": "cross_attention",
+            "name": "layers.1.radar_ffn.net.1",
+            "in_shape": [
+              1,
+              30,
+              128
+            ],
+            "out_shape": [
+              1,
+              30,
+              512
+            ],
+            "macs": 1966080,
+            "flops": 3932160
+          },
+          {
+            "op": "linear",
+            "block": "cross_attention",
+            "name": "layers.1.radar_ffn.net.4",
+            "in_shape": [
+              1,
+              30,
+              512
+            ],
+            "out_shape": [
+              1,
+              30,
+              128
+            ],
+            "macs": 1966080,
+            "flops": 3932160
+          },
+          {
+            "op": "linear",
+            "block": "cross_attention",
+            "name": "layers.1.camera_ffn.net.1",
+            "in_shape": [
+              1,
+              30,
+              128
+            ],
+            "out_shape": [
+              1,
+              30,
+              512
+            ],
+            "macs": 1966080,
+            "flops": 3932160
+          },
+          {
+            "op": "linear",
+            "block": "cross_attention",
+            "name": "layers.1.camera_ffn.net.4",
+            "in_shape": [
+              1,
+              30,
+              512
+            ],
+            "out_shape": [
+              1,
+              30,
+              128
+            ],
+            "macs": 1966080,
+            "flops": 3932160
+          }
+        ]
+      },
+      "head": {
+        "macs": 66176,
+        "flops": 132352,
+        "mops": 0.066176,
+        "mmacs": 0.066176,
+        "mflops": 0.132352,
+        "gflops": 0.000132352,
+        "ops": 6,
+        "macs_by_op": {
+          "linear": 66176
+        },
+        "mops_by_op": {
+          "linear": 0.066176
+        },
+        "layers": [
+          {
+            "op": "linear",
+            "block": "head",
+            "name": "shared_proj.1",
+            "in_shape": [
+              1,
+              128
+            ],
+            "out_shape": [
+              1,
+              128
+            ],
+            "macs": 16384,
+            "flops": 32768
+          },
+          {
+            "op": "linear",
+            "block": "head",
+            "name": "shared_proj.1",
+            "in_shape": [
+              1,
+              128
+            ],
+            "out_shape": [
+              1,
+              128
+            ],
+            "macs": 16384,
+            "flops": 32768
+          },
+          {
+            "op": "linear",
+            "block": "head",
+            "name": "activity_classifier.1",
+            "in_shape": [
+              1,
+              128
+            ],
+            "out_shape": [
+              1,
+              128
+            ],
+            "macs": 16384,
+            "flops": 32768
+          },
+          {
+            "op": "linear",
+            "block": "head",
+            "name": "activity_classifier.4",
+            "in_shape": [
+              1,
+              128
+            ],
+            "out_shape": [
+              1,
+              3
+            ],
+            "macs": 384,
+            "flops": 768
+          },
+          {
+            "op": "linear",
+            "block": "head",
+            "name": "human_classifier.1",
+            "in_shape": [
+              1,
+              128
+            ],
+            "out_shape": [
+              1,
+              128
+            ],
+            "macs": 16384,
+            "flops": 32768
+          },
+          {
+            "op": "linear",
+            "block": "head",
+            "name": "human_classifier.4",
+            "in_shape": [
+              1,
+              128
+            ],
+            "out_shape": [
+              1,
+              2
+            ],
+            "macs": 256,
+            "flops": 512
+          }
+        ]
+      }
+    }
+  },
+  "kpi": {
+    "targets": {
+      "source": "AI-DISCO \u2014 cam1+radar2 multimodal activity recognition (Jetson Nano class)",
+      "deployment_profile": "cam1_radar2",
+      "target_platform": "jetson_nano_4gb",
+      "latency_ms_mean_max": 100.0,
+      "latency_ms_p95_max": 150.0,
+      "throughput_fps_min": 8.0,
+      "weight_memory_mb_max": 32.0,
+      "params_max": 5000000,
+      "buffer_memory_mb_max": 64.0,
+      "gflops_per_inference_max": 15.0,
+      "mmacs_per_inference_max": 8000.0,
+      "temporal_mmacs_max": 50.0,
+      "cross_attn_mmacs_max": 100.0
+    },
+    "measured": {
+      "deployment_profile": "cam1_radar2",
+      "latency_ms_mean": 27.819124900088354,
+      "latency_ms_p50": 24.7327104998476,
+      "latency_ms_p95": 36.587321950537415,
+      "throughput_fps": 35.94649377331147,
+      "mmacs_per_inference": 4139.110016,
+      "mflops_per_inference": 8278.220032,
+      "gflops_per_inference": 8.278220032,
+      "mmacs_per_s_achieved": 148786.4924171951,
+      "mflops_per_s_achieved": 297572.9848343902,
+      "gflops_per_s_achieved": 297.57298483439024,
+      "achieved_mops_per_s": 148786.4924171951,
+      "achieved_gflops_per_s": 297.57298483439024,
+      "parameters": 1444613,
+      "weight_memory_kb": 5646.56640625,
+      "weight_memory_mb": 5.514225006103516,
+      "buffer_memory_mb": 5.361328125,
+      "conv_mmacs": 4102.9632,
+      "conv_share": 0.9912670076754974,
+      "temporal_transformer_mmacs": 12.02688,
+      "temporal_transformer_share": 0.002905668115490845,
+      "cross_attention_mmacs": 24.05376,
+      "cross_attention_share": 0.00581133623098169
+    },
+    "pass": {
+      "latency_mean_lt_100ms": true,
+      "latency_p95_lt_150ms": true,
+      "throughput_ge_8fps": true,
+      "weight_memory_lt_32mb": true,
+      "params_lt_5m": true,
+      "buffer_memory_lt_64mb": true,
+      "gflops_per_inf_lt_15": true,
+      "mmacs_per_inf_lt_8000": true,
+      "temporal_mmacs_lt_50": true,
+      "cross_attn_mmacs_lt_100": true
+    },
+    "pass_count": 10,
+    "check_count": 10,
+    "interpretation": {
+      "latency": "Model-forward latency on the bench device (sensor I/O not included).",
+      "throughput_fps": "1000 / mean latency; usable realtime floor is 8 FPS.",
+      "gflops_per_inference": "Theoretical cost per window; Nano class comfort < 15 GFLOPs.",
+      "conv_share": "Frame CNN share \u2014 expected dominant for 112\u00b2 \u00d7 window.",
+      "temporal_transformer_mmacs": "Per-modality TemporalEncoder (self-attn + FFN).",
+      "cross_attention_mmacs": "Radar\u2194camera CrossAttentionBlock stack.",
+      "jetson_note": "Passing host CUDA latency does not guarantee Nano latency; re-run with --device cuda on the Jetson for platform gate."
+    }
+  },
+  "notes": [
+    "FLOPs = 2 * MACs (mul-add counted as 2).",
+    "MOPS / MMACs = MACs / 1e6.",
+    "MFLOPs = FLOPs / 1e6.",
+    "achieved_mops_per_s = theoretical MACs / measured mean latency.",
+    "AI-DISCO KPI targets for Jetson Nano\u2013class cam1+radar2 deployment.",
+    "operation_specs.conv = radar+camera ConvFrameEncoder Conv2d cost.",
+    "operation_specs.temporal_transformer = radar/camera TemporalEncoder (TransformerEncoderLayer self-attn + FFN).",
+    "Linear layers nested under MultiheadAttention are not double-counted.",
+    "Current forward always runs radar+camera encoders; modality flags zero tokens after encode (so radar_only/camera_only theoretical MACs match both until early-skip is added)."
+  ],
+  "profiles": [
+    {
+      "mode": "live_camera_only",
+      "input": {
+        "batch": 1,
+        "window": 30,
+        "radar_shape": [
+          1,
+          30,
+          3,
+          32,
+          32
+        ],
+        "camera_shape": [
+          1,
+          30,
+          3,
+          112,
+          112
+        ],
+        "radar_present": false,
+        "camera_present": true
+      },
+      "live_capture": {
+        "camera_device": 0,
+        "camera_width": 640,
+        "camera_height": 480,
+        "camera_fps": 15.0,
+        "num_rx": null,
+        "radar_profile": null,
+        "frame_rate_hz": null,
+        "radar1_uuid": null,
+        "radar2_uuid": null,
+        "mirror_radar2": null,
+        "fusion_meta_last": {
+          "camera_only": true
+        },
+        "timing": {
+          "camera_fetch_preprocess_ms": {
+            "count": 64.0,
+            "mean_ms": 9.544392578078487,
+            "std_ms": 2.2086960197945498,
+            "min_ms": 7.307330999537953,
+            "max_ms": 19.77702899966971,
+            "p50_ms": 9.814484000344237,
+            "p95_ms": 14.196309550425198,
+            "p99_ms": 16.899689219353593
+          },
+          "inference_ms": {
+            "count": 30.0,
+            "mean_ms": 27.819124900088354,
+            "std_ms": 5.999383416197705,
+            "min_ms": 19.129676999000367,
+            "max_ms": 49.325166999551584,
+            "p50_ms": 24.7327104998476,
+            "p95_ms": 36.587321950537415,
+            "p99_ms": 46.888761579702994
+          },
+          "total_loop_ms": {
+            "count": 30.0,
+            "mean_ms": 37.62419739996403,
+            "std_ms": 6.7367774892409304,
+            "min_ms": 28.53595799933828,
+            "max_ms": 63.02176099961798,
+            "p50_ms": 33.92421049920813,
+            "p95_ms": 47.147089750706044,
+            "p99_ms": 59.606810610039254
+          }
+        },
+        "notes": [
+          "camera_only: radar tensor is zeros with radar_present=False; no radar SDK.",
+          "latency.* remains model-forward latency only so KPI thresholds stay comparable."
+        ]
+      },
+      "compute": {
+        "total_macs": 4139110016,
+        "total_flops": 8278220032,
+        "total_mops": 4139.110016,
+        "total_gflops": 8.278220032,
+        "macs_by_op": {
+          "conv2d": 4102963200,
+          "multihead_attention": 12487680,
+          "linear": 23659136
+        },
+        "flops_by_op": {
+          "conv2d": 8205926400,
+          "multihead_attention": 24975360,
+          "linear": 47318272
+        },
+        "mops_by_op": {
+          "conv2d": 4102.9632,
+          "multihead_attention": 12.48768,
+          "linear": 23.659136
+        },
+        "conv2d_layers": [
+          {
+            "op": "conv2d",
+            "block": "conv_radar",
+            "name": "radar_encoder.net.0",
+            "in_shape": [
+              30,
+              3,
+              32,
+              32
+            ],
+            "out_shape": [
+              30,
+              32,
+              32,
+              32
+            ],
+            "kernel": [
+              3,
+              3
+            ],
+            "macs": 26542080,
+            "flops": 53084160
+          },
+          {
+            "op": "conv2d",
+            "block": "conv_radar",
+            "name": "radar_encoder.net.4",
+            "in_shape": [
+              30,
+              32,
+              16,
+              16
+            ],
+            "out_shape": [
+              30,
+              64,
+              16,
+              16
+            ],
+            "kernel": [
+              3,
+              3
+            ],
+            "macs": 141557760,
+            "flops": 283115520
+          },
+          {
+            "op": "conv2d",
+            "block": "conv_radar",
+            "name": "radar_encoder.net.8",
+            "in_shape": [
+              30,
+              64,
+              8,
+              8
+            ],
+            "out_shape": [
+              30,
+              128,
+              8,
+              8
+            ],
+            "kernel": [
+              3,
+              3
+            ],
+            "macs": 141557760,
+            "flops": 283115520
+          },
+          {
+            "op": "conv2d",
+            "block": "conv_camera",
+            "name": "camera_encoder.net.0",
+            "in_shape": [
+              30,
+              3,
+              112,
+              112
+            ],
+            "out_shape": [
+              30,
+              32,
+              112,
+              112
+            ],
+            "kernel": [
+              3,
+              3
+            ],
+            "macs": 325140480,
+            "flops": 650280960
+          },
+          {
+            "op": "conv2d",
+            "block": "conv_camera",
+            "name": "camera_encoder.net.4",
+            "in_shape": [
+              30,
+              32,
+              56,
+              56
+            ],
+            "out_shape": [
+              30,
+              64,
+              56,
+              56
+            ],
+            "kernel": [
+              3,
+              3
+            ],
+            "macs": 1734082560,
+            "flops": 3468165120
+          },
+          {
+            "op": "conv2d",
+            "block": "conv_camera",
+            "name": "camera_encoder.net.8",
+            "in_shape": [
+              30,
+              64,
+              28,
+              28
+            ],
+            "out_shape": [
+              30,
+              128,
+              28,
+              28
+            ],
+            "kernel": [
+              3,
+              3
+            ],
+            "macs": 1734082560,
+            "flops": 3468165120
+          }
+        ],
+        "conv2d_macs": 4102963200,
+        "conv2d_mops": 4102.9632,
+        "conv2d_flops": 8205926400,
+        "operation_specs": {
+          "conv": {
+            "macs": 4102963200,
+            "flops": 8205926400,
+            "mops": 4102.9632,
+            "mmacs": 4102.9632,
+            "mflops": 8205.9264,
+            "gflops": 8.2059264,
+            "ops": 6,
+            "macs_by_op": {
+              "conv2d": 4102963200
+            },
+            "mops_by_op": {
+              "conv2d": 4102.9632
+            },
+            "layers": [
+              {
+                "op": "conv2d",
+                "block": "conv_radar",
+                "name": "radar_encoder.net.0",
+                "in_shape": [
+                  30,
+                  3,
+                  32,
+                  32
+                ],
+                "out_shape": [
+                  30,
+                  32,
+                  32,
+                  32
+                ],
+                "kernel": [
+                  3,
+                  3
+                ],
+                "macs": 26542080,
+                "flops": 53084160
+              },
+              {
+                "op": "conv2d",
+                "block": "conv_radar",
+                "name": "radar_encoder.net.4",
+                "in_shape": [
+                  30,
+                  32,
+                  16,
+                  16
+                ],
+                "out_shape": [
+                  30,
+                  64,
+                  16,
+                  16
+                ],
+                "kernel": [
+                  3,
+                  3
+                ],
+                "macs": 141557760,
+                "flops": 283115520
+              },
+              {
+                "op": "conv2d",
+                "block": "conv_radar",
+                "name": "radar_encoder.net.8",
+                "in_shape": [
+                  30,
+                  64,
+                  8,
+                  8
+                ],
+                "out_shape": [
+                  30,
+                  128,
+                  8,
+                  8
+                ],
+                "kernel": [
+                  3,
+                  3
+                ],
+                "macs": 141557760,
+                "flops": 283115520
+              },
+              {
+                "op": "conv2d",
+                "block": "conv_camera",
+                "name": "camera_encoder.net.0",
+                "in_shape": [
+                  30,
+                  3,
+                  112,
+                  112
+                ],
+                "out_shape": [
+                  30,
+                  32,
+                  112,
+                  112
+                ],
+                "kernel": [
+                  3,
+                  3
+                ],
+                "macs": 325140480,
+                "flops": 650280960
+              },
+              {
+                "op": "conv2d",
+                "block": "conv_camera",
+                "name": "camera_encoder.net.4",
+                "in_shape": [
+                  30,
+                  32,
+                  56,
+                  56
+                ],
+                "out_shape": [
+                  30,
+                  64,
+                  56,
+                  56
+                ],
+                "kernel": [
+                  3,
+                  3
+                ],
+                "macs": 1734082560,
+                "flops": 3468165120
+              },
+              {
+                "op": "conv2d",
+                "block": "conv_camera",
+                "name": "camera_encoder.net.8",
+                "in_shape": [
+                  30,
+                  64,
+                  28,
+                  28
+                ],
+                "out_shape": [
+                  30,
+                  128,
+                  28,
+                  28
+                ],
+                "kernel": [
+                  3,
+                  3
+                ],
+                "macs": 1734082560,
+                "flops": 3468165120
+              }
+            ],
+            "share_of_total": 0.9912670076754974,
+            "description": "Frame CNN encoders (radar_encoder + camera_encoder Conv2d)",
+            "by_stream": {
+              "radar": {
+                "macs": 309657600,
+                "flops": 619315200,
+                "mops": 309.6576,
+                "mmacs": 309.6576,
+                "mflops": 619.3152,
+                "gflops": 0.6193152,
+                "ops": 3,
+                "macs_by_op": {
+                  "conv2d": 309657600
+                },
+                "mops_by_op": {
+                  "conv2d": 309.6576
+                },
+                "layers": [
+                  {
+                    "op": "conv2d",
+                    "block": "conv_radar",
+                    "name": "radar_encoder.net.0",
+                    "in_shape": [
+                      30,
+                      3,
+                      32,
+                      32
+                    ],
+                    "out_shape": [
+                      30,
+                      32,
+                      32,
+                      32
+                    ],
+                    "kernel": [
+                      3,
+                      3
+                    ],
+                    "macs": 26542080,
+                    "flops": 53084160
+                  },
+                  {
+                    "op": "conv2d",
+                    "block": "conv_radar",
+                    "name": "radar_encoder.net.4",
+                    "in_shape": [
+                      30,
+                      32,
+                      16,
+                      16
+                    ],
+                    "out_shape": [
+                      30,
+                      64,
+                      16,
+                      16
+                    ],
+                    "kernel": [
+                      3,
+                      3
+                    ],
+                    "macs": 141557760,
+                    "flops": 283115520
+                  },
+                  {
+                    "op": "conv2d",
+                    "block": "conv_radar",
+                    "name": "radar_encoder.net.8",
+                    "in_shape": [
+                      30,
+                      64,
+                      8,
+                      8
+                    ],
+                    "out_shape": [
+                      30,
+                      128,
+                      8,
+                      8
+                    ],
+                    "kernel": [
+                      3,
+                      3
+                    ],
+                    "macs": 141557760,
+                    "flops": 283115520
+                  }
+                ]
+              },
+              "camera": {
+                "macs": 3793305600,
+                "flops": 7586611200,
+                "mops": 3793.3056,
+                "mmacs": 3793.3056,
+                "mflops": 7586.6112,
+                "gflops": 7.5866112,
+                "ops": 3,
+                "macs_by_op": {
+                  "conv2d": 3793305600
+                },
+                "mops_by_op": {
+                  "conv2d": 3793.3056
+                },
+                "layers": [
+                  {
+                    "op": "conv2d",
+                    "block": "conv_camera",
+                    "name": "camera_encoder.net.0",
+                    "in_shape": [
+                      30,
+                      3,
+                      112,
+                      112
+                    ],
+                    "out_shape": [
+                      30,
+                      32,
+                      112,
+                      112
+                    ],
+                    "kernel": [
+                      3,
+                      3
+                    ],
+                    "macs": 325140480,
+                    "flops": 650280960
+                  },
+                  {
+                    "op": "conv2d",
+                    "block": "conv_camera",
+                    "name": "camera_encoder.net.4",
+                    "in_shape": [
+                      30,
+                      32,
+                      56,
+                      56
+                    ],
+                    "out_shape": [
+                      30,
+                      64,
+                      56,
+                      56
+                    ],
+                    "kernel": [
+                      3,
+                      3
+                    ],
+                    "macs": 1734082560,
+                    "flops": 3468165120
+                  },
+                  {
+                    "op": "conv2d",
+                    "block": "conv_camera",
+                    "name": "camera_encoder.net.8",
+                    "in_shape": [
+                      30,
+                      64,
+                      28,
+                      28
+                    ],
+                    "out_shape": [
+                      30,
+                      128,
+                      28,
+                      28
+                    ],
+                    "kernel": [
+                      3,
+                      3
+                    ],
+                    "macs": 1734082560,
+                    "flops": 3468165120
+                  }
+                ]
+              }
+            }
+          },
+          "temporal_transformer": {
+            "macs": 12026880,
+            "flops": 24053760,
+            "mops": 12.02688,
+            "mmacs": 12.02688,
+            "mflops": 24.05376,
+            "gflops": 0.02405376,
+            "ops": 6,
+            "macs_by_op": {
+              "multihead_attention": 4162560,
+              "linear": 7864320
+            },
+            "mops_by_op": {
+              "multihead_attention": 4.16256,
+              "linear": 7.86432
+            },
+            "layers": [
+              {
+                "op": "multihead_attention",
+                "block": "temporal_radar",
+                "name": "radar_temporal.net.layers.0.self_attn",
+                "in_shape": [
+                  1,
+                  30,
+                  128
+                ],
+                "macs": 2081280,
+                "flops": 4162560
+              },
+              {
+                "op": "linear",
+                "block": "temporal_radar",
+                "name": "radar_temporal.net.layers.0.linear1",
+                "in_shape": [
+                  1,
+                  30,
+                  128
+                ],
+                "out_shape": [
+                  1,
+                  30,
+                  512
+                ],
+                "macs": 1966080,
+                "flops": 3932160
+              },
+              {
+                "op": "linear",
+                "block": "temporal_radar",
+                "name": "radar_temporal.net.layers.0.linear2",
+                "in_shape": [
+                  1,
+                  30,
+                  512
+                ],
+                "out_shape": [
+                  1,
+                  30,
+                  128
+                ],
+                "macs": 1966080,
+                "flops": 3932160
+              },
+              {
+                "op": "multihead_attention",
+                "block": "temporal_camera",
+                "name": "camera_temporal.net.layers.0.self_attn",
+                "in_shape": [
+                  1,
+                  30,
+                  128
+                ],
+                "macs": 2081280,
+                "flops": 4162560
+              },
+              {
+                "op": "linear",
+                "block": "temporal_camera",
+                "name": "camera_temporal.net.layers.0.linear1",
+                "in_shape": [
+                  1,
+                  30,
+                  128
+                ],
+                "out_shape": [
+                  1,
+                  30,
+                  512
+                ],
+                "macs": 1966080,
+                "flops": 3932160
+              },
+              {
+                "op": "linear",
+                "block": "temporal_camera",
+                "name": "camera_temporal.net.layers.0.linear2",
+                "in_shape": [
+                  1,
+                  30,
+                  512
+                ],
+                "out_shape": [
+                  1,
+                  30,
+                  128
+                ],
+                "macs": 1966080,
+                "flops": 3932160
+              }
+            ],
+            "share_of_total": 0.002905668115490845,
+            "description": "Per-modality TemporalEncoder (TransformerEncoderLayer: self-attn MHA + FFN linears)",
+            "by_stream": {
+              "radar": {
+                "macs": 6013440,
+                "flops": 12026880,
+                "mops": 6.01344,
+                "mmacs": 6.01344,
+                "mflops": 12.02688,
+                "gflops": 0.01202688,
+                "ops": 3,
+                "macs_by_op": {
+                  "multihead_attention": 2081280,
+                  "linear": 3932160
+                },
+                "mops_by_op": {
+                  "multihead_attention": 2.08128,
+                  "linear": 3.93216
+                },
+                "layers": [
+                  {
+                    "op": "multihead_attention",
+                    "block": "temporal_radar",
+                    "name": "radar_temporal.net.layers.0.self_attn",
+                    "in_shape": [
+                      1,
+                      30,
+                      128
+                    ],
+                    "macs": 2081280,
+                    "flops": 4162560
+                  },
+                  {
+                    "op": "linear",
+                    "block": "temporal_radar",
+                    "name": "radar_temporal.net.layers.0.linear1",
+                    "in_shape": [
+                      1,
+                      30,
+                      128
+                    ],
+                    "out_shape": [
+                      1,
+                      30,
+                      512
+                    ],
+                    "macs": 1966080,
+                    "flops": 3932160
+                  },
+                  {
+                    "op": "linear",
+                    "block": "temporal_radar",
+                    "name": "radar_temporal.net.layers.0.linear2",
+                    "in_shape": [
+                      1,
+                      30,
+                      512
+                    ],
+                    "out_shape": [
+                      1,
+                      30,
+                      128
+                    ],
+                    "macs": 1966080,
+                    "flops": 3932160
+                  }
+                ]
+              },
+              "camera": {
+                "macs": 6013440,
+                "flops": 12026880,
+                "mops": 6.01344,
+                "mmacs": 6.01344,
+                "mflops": 12.02688,
+                "gflops": 0.01202688,
+                "ops": 3,
+                "macs_by_op": {
+                  "multihead_attention": 2081280,
+                  "linear": 3932160
+                },
+                "mops_by_op": {
+                  "multihead_attention": 2.08128,
+                  "linear": 3.93216
+                },
+                "layers": [
+                  {
+                    "op": "multihead_attention",
+                    "block": "temporal_camera",
+                    "name": "camera_temporal.net.layers.0.self_attn",
+                    "in_shape": [
+                      1,
+                      30,
+                      128
+                    ],
+                    "macs": 2081280,
+                    "flops": 4162560
+                  },
+                  {
+                    "op": "linear",
+                    "block": "temporal_camera",
+                    "name": "camera_temporal.net.layers.0.linear1",
+                    "in_shape": [
+                      1,
+                      30,
+                      128
+                    ],
+                    "out_shape": [
+                      1,
+                      30,
+                      512
+                    ],
+                    "macs": 1966080,
+                    "flops": 3932160
+                  },
+                  {
+                    "op": "linear",
+                    "block": "temporal_camera",
+                    "name": "camera_temporal.net.layers.0.linear2",
+                    "in_shape": [
+                      1,
+                      30,
+                      512
+                    ],
+                    "out_shape": [
+                      1,
+                      30,
+                      128
+                    ],
+                    "macs": 1966080,
+                    "flops": 3932160
+                  }
+                ]
+              }
+            },
+            "attn_macs": 4162560,
+            "ffn_macs": 7864320
+          },
+          "cross_attention": {
+            "macs": 24053760,
+            "flops": 48107520,
+            "mops": 24.05376,
+            "mmacs": 24.05376,
+            "mflops": 48.10752,
+            "gflops": 0.04810752,
+            "ops": 12,
+            "macs_by_op": {
+              "multihead_attention": 8325120,
+              "linear": 15728640
+            },
+            "mops_by_op": {
+              "multihead_attention": 8.32512,
+              "linear": 15.72864
+            },
+            "layers": [
+              {
+                "op": "multihead_attention",
+                "block": "cross_attention",
+                "name": "layers.0.radar_to_camera",
+                "in_shape": [
+                  1,
+                  30,
+                  128
+                ],
+                "macs": 2081280,
+                "flops": 4162560
+              },
+              {
+                "op": "multihead_attention",
+                "block": "cross_attention",
+                "name": "layers.0.camera_to_radar",
+                "in_shape": [
+                  1,
+                  30,
+                  128
+                ],
+                "macs": 2081280,
+                "flops": 4162560
+              },
+              {
+                "op": "linear",
+                "block": "cross_attention",
+                "name": "layers.0.radar_ffn.net.1",
+                "in_shape": [
+                  1,
+                  30,
+                  128
+                ],
+                "out_shape": [
+                  1,
+                  30,
+                  512
+                ],
+                "macs": 1966080,
+                "flops": 3932160
+              },
+              {
+                "op": "linear",
+                "block": "cross_attention",
+                "name": "layers.0.radar_ffn.net.4",
+                "in_shape": [
+                  1,
+                  30,
+                  512
+                ],
+                "out_shape": [
+                  1,
+                  30,
+                  128
+                ],
+                "macs": 1966080,
+                "flops": 3932160
+              },
+              {
+                "op": "linear",
+                "block": "cross_attention",
+                "name": "layers.0.camera_ffn.net.1",
+                "in_shape": [
+                  1,
+                  30,
+                  128
+                ],
+                "out_shape": [
+                  1,
+                  30,
+                  512
+                ],
+                "macs": 1966080,
+                "flops": 3932160
+              },
+              {
+                "op": "linear",
+                "block": "cross_attention",
+                "name": "layers.0.camera_ffn.net.4",
+                "in_shape": [
+                  1,
+                  30,
+                  512
+                ],
+                "out_shape": [
+                  1,
+                  30,
+                  128
+                ],
+                "macs": 1966080,
+                "flops": 3932160
+              },
+              {
+                "op": "multihead_attention",
+                "block": "cross_attention",
+                "name": "layers.1.radar_to_camera",
+                "in_shape": [
+                  1,
+                  30,
+                  128
+                ],
+                "macs": 2081280,
+                "flops": 4162560
+              },
+              {
+                "op": "multihead_attention",
+                "block": "cross_attention",
+                "name": "layers.1.camera_to_radar",
+                "in_shape": [
+                  1,
+                  30,
+                  128
+                ],
+                "macs": 2081280,
+                "flops": 4162560
+              },
+              {
+                "op": "linear",
+                "block": "cross_attention",
+                "name": "layers.1.radar_ffn.net.1",
+                "in_shape": [
+                  1,
+                  30,
+                  128
+                ],
+                "out_shape": [
+                  1,
+                  30,
+                  512
+                ],
+                "macs": 1966080,
+                "flops": 3932160
+              },
+              {
+                "op": "linear",
+                "block": "cross_attention",
+                "name": "layers.1.radar_ffn.net.4",
+                "in_shape": [
+                  1,
+                  30,
+                  512
+                ],
+                "out_shape": [
+                  1,
+                  30,
+                  128
+                ],
+                "macs": 1966080,
+                "flops": 3932160
+              },
+              {
+                "op": "linear",
+                "block": "cross_attention",
+                "name": "layers.1.camera_ffn.net.1",
+                "in_shape": [
+                  1,
+                  30,
+                  128
+                ],
+                "out_shape": [
+                  1,
+                  30,
+                  512
+                ],
+                "macs": 1966080,
+                "flops": 3932160
+              },
+              {
+                "op": "linear",
+                "block": "cross_attention",
+                "name": "layers.1.camera_ffn.net.4",
+                "in_shape": [
+                  1,
+                  30,
+                  512
+                ],
+                "out_shape": [
+                  1,
+                  30,
+                  128
+                ],
+                "macs": 1966080,
+                "flops": 3932160
+              }
+            ],
+            "share_of_total": 0.00581133623098169,
+            "description": "CrossAttentionBlock stack (radar\u2194camera MHA + FFN)"
+          },
+          "head": {
+            "macs": 66176,
+            "flops": 132352,
+            "mops": 0.066176,
+            "mmacs": 0.066176,
+            "mflops": 0.132352,
+            "gflops": 0.000132352,
+            "ops": 6,
+            "macs_by_op": {
+              "linear": 66176
+            },
+            "mops_by_op": {
+              "linear": 0.066176
+            },
+            "layers": [
+              {
+                "op": "linear",
+                "block": "head",
+                "name": "shared_proj.1",
+                "in_shape": [
+                  1,
+                  128
+                ],
+                "out_shape": [
+                  1,
+                  128
+                ],
+                "macs": 16384,
+                "flops": 32768
+              },
+              {
+                "op": "linear",
+                "block": "head",
+                "name": "shared_proj.1",
+                "in_shape": [
+                  1,
+                  128
+                ],
+                "out_shape": [
+                  1,
+                  128
+                ],
+                "macs": 16384,
+                "flops": 32768
+              },
+              {
+                "op": "linear",
+                "block": "head",
+                "name": "activity_classifier.1",
+                "in_shape": [
+                  1,
+                  128
+                ],
+                "out_shape": [
+                  1,
+                  128
+                ],
+                "macs": 16384,
+                "flops": 32768
+              },
+              {
+                "op": "linear",
+                "block": "head",
+                "name": "activity_classifier.4",
+                "in_shape": [
+                  1,
+                  128
+                ],
+                "out_shape": [
+                  1,
+                  3
+                ],
+                "macs": 384,
+                "flops": 768
+              },
+              {
+                "op": "linear",
+                "block": "head",
+                "name": "human_classifier.1",
+                "in_shape": [
+                  1,
+                  128
+                ],
+                "out_shape": [
+                  1,
+                  128
+                ],
+                "macs": 16384,
+                "flops": 32768
+              },
+              {
+                "op": "linear",
+                "block": "head",
+                "name": "human_classifier.4",
+                "in_shape": [
+                  1,
+                  128
+                ],
+                "out_shape": [
+                  1,
+                  2
+                ],
+                "macs": 256,
+                "flops": 512
+              }
+            ],
+            "share_of_total": 1.5987978030106075e-05,
+            "description": "shared_proj + activity/human classifiers"
+          },
+          "by_block": {
+            "conv_radar": {
+              "macs": 309657600,
+              "flops": 619315200,
+              "mops": 309.6576,
+              "mmacs": 309.6576,
+              "mflops": 619.3152,
+              "gflops": 0.6193152,
+              "ops": 3,
+              "macs_by_op": {
+                "conv2d": 309657600
+              },
+              "mops_by_op": {
+                "conv2d": 309.6576
+              },
+              "layers": [
+                {
+                  "op": "conv2d",
+                  "block": "conv_radar",
+                  "name": "radar_encoder.net.0",
+                  "in_shape": [
+                    30,
+                    3,
+                    32,
+                    32
+                  ],
+                  "out_shape": [
+                    30,
+                    32,
+                    32,
+                    32
+                  ],
+                  "kernel": [
+                    3,
+                    3
+                  ],
+                  "macs": 26542080,
+                  "flops": 53084160
+                },
+                {
+                  "op": "conv2d",
+                  "block": "conv_radar",
+                  "name": "radar_encoder.net.4",
+                  "in_shape": [
+                    30,
+                    32,
+                    16,
+                    16
+                  ],
+                  "out_shape": [
+                    30,
+                    64,
+                    16,
+                    16
+                  ],
+                  "kernel": [
+                    3,
+                    3
+                  ],
+                  "macs": 141557760,
+                  "flops": 283115520
+                },
+                {
+                  "op": "conv2d",
+                  "block": "conv_radar",
+                  "name": "radar_encoder.net.8",
+                  "in_shape": [
+                    30,
+                    64,
+                    8,
+                    8
+                  ],
+                  "out_shape": [
+                    30,
+                    128,
+                    8,
+                    8
+                  ],
+                  "kernel": [
+                    3,
+                    3
+                  ],
+                  "macs": 141557760,
+                  "flops": 283115520
+                }
+              ]
+            },
+            "conv_camera": {
+              "macs": 3793305600,
+              "flops": 7586611200,
+              "mops": 3793.3056,
+              "mmacs": 3793.3056,
+              "mflops": 7586.6112,
+              "gflops": 7.5866112,
+              "ops": 3,
+              "macs_by_op": {
+                "conv2d": 3793305600
+              },
+              "mops_by_op": {
+                "conv2d": 3793.3056
+              },
+              "layers": [
+                {
+                  "op": "conv2d",
+                  "block": "conv_camera",
+                  "name": "camera_encoder.net.0",
+                  "in_shape": [
+                    30,
+                    3,
+                    112,
+                    112
+                  ],
+                  "out_shape": [
+                    30,
+                    32,
+                    112,
+                    112
+                  ],
+                  "kernel": [
+                    3,
+                    3
+                  ],
+                  "macs": 325140480,
+                  "flops": 650280960
+                },
+                {
+                  "op": "conv2d",
+                  "block": "conv_camera",
+                  "name": "camera_encoder.net.4",
+                  "in_shape": [
+                    30,
+                    32,
+                    56,
+                    56
+                  ],
+                  "out_shape": [
+                    30,
+                    64,
+                    56,
+                    56
+                  ],
+                  "kernel": [
+                    3,
+                    3
+                  ],
+                  "macs": 1734082560,
+                  "flops": 3468165120
+                },
+                {
+                  "op": "conv2d",
+                  "block": "conv_camera",
+                  "name": "camera_encoder.net.8",
+                  "in_shape": [
+                    30,
+                    64,
+                    28,
+                    28
+                  ],
+                  "out_shape": [
+                    30,
+                    128,
+                    28,
+                    28
+                  ],
+                  "kernel": [
+                    3,
+                    3
+                  ],
+                  "macs": 1734082560,
+                  "flops": 3468165120
+                }
+              ]
+            },
+            "temporal_radar": {
+              "macs": 6013440,
+              "flops": 12026880,
+              "mops": 6.01344,
+              "mmacs": 6.01344,
+              "mflops": 12.02688,
+              "gflops": 0.01202688,
+              "ops": 3,
+              "macs_by_op": {
+                "multihead_attention": 2081280,
+                "linear": 3932160
+              },
+              "mops_by_op": {
+                "multihead_attention": 2.08128,
+                "linear": 3.93216
+              },
+              "layers": [
+                {
+                  "op": "multihead_attention",
+                  "block": "temporal_radar",
+                  "name": "radar_temporal.net.layers.0.self_attn",
+                  "in_shape": [
+                    1,
+                    30,
+                    128
+                  ],
+                  "macs": 2081280,
+                  "flops": 4162560
+                },
+                {
+                  "op": "linear",
+                  "block": "temporal_radar",
+                  "name": "radar_temporal.net.layers.0.linear1",
+                  "in_shape": [
+                    1,
+                    30,
+                    128
+                  ],
+                  "out_shape": [
+                    1,
+                    30,
+                    512
+                  ],
+                  "macs": 1966080,
+                  "flops": 3932160
+                },
+                {
+                  "op": "linear",
+                  "block": "temporal_radar",
+                  "name": "radar_temporal.net.layers.0.linear2",
+                  "in_shape": [
+                    1,
+                    30,
+                    512
+                  ],
+                  "out_shape": [
+                    1,
+                    30,
+                    128
+                  ],
+                  "macs": 1966080,
+                  "flops": 3932160
+                }
+              ]
+            },
+            "temporal_camera": {
+              "macs": 6013440,
+              "flops": 12026880,
+              "mops": 6.01344,
+              "mmacs": 6.01344,
+              "mflops": 12.02688,
+              "gflops": 0.01202688,
+              "ops": 3,
+              "macs_by_op": {
+                "multihead_attention": 2081280,
+                "linear": 3932160
+              },
+              "mops_by_op": {
+                "multihead_attention": 2.08128,
+                "linear": 3.93216
+              },
+              "layers": [
+                {
+                  "op": "multihead_attention",
+                  "block": "temporal_camera",
+                  "name": "camera_temporal.net.layers.0.self_attn",
+                  "in_shape": [
+                    1,
+                    30,
+                    128
+                  ],
+                  "macs": 2081280,
+                  "flops": 4162560
+                },
+                {
+                  "op": "linear",
+                  "block": "temporal_camera",
+                  "name": "camera_temporal.net.layers.0.linear1",
+                  "in_shape": [
+                    1,
+                    30,
+                    128
+                  ],
+                  "out_shape": [
+                    1,
+                    30,
+                    512
+                  ],
+                  "macs": 1966080,
+                  "flops": 3932160
+                },
+                {
+                  "op": "linear",
+                  "block": "temporal_camera",
+                  "name": "camera_temporal.net.layers.0.linear2",
+                  "in_shape": [
+                    1,
+                    30,
+                    512
+                  ],
+                  "out_shape": [
+                    1,
+                    30,
+                    128
+                  ],
+                  "macs": 1966080,
+                  "flops": 3932160
+                }
+              ]
+            },
+            "cross_attention": {
+              "macs": 24053760,
+              "flops": 48107520,
+              "mops": 24.05376,
+              "mmacs": 24.05376,
+              "mflops": 48.10752,
+              "gflops": 0.04810752,
+              "ops": 12,
+              "macs_by_op": {
+                "multihead_attention": 8325120,
+                "linear": 15728640
+              },
+              "mops_by_op": {
+                "multihead_attention": 8.32512,
+                "linear": 15.72864
+              },
+              "layers": [
+                {
+                  "op": "multihead_attention",
+                  "block": "cross_attention",
+                  "name": "layers.0.radar_to_camera",
+                  "in_shape": [
+                    1,
+                    30,
+                    128
+                  ],
+                  "macs": 2081280,
+                  "flops": 4162560
+                },
+                {
+                  "op": "multihead_attention",
+                  "block": "cross_attention",
+                  "name": "layers.0.camera_to_radar",
+                  "in_shape": [
+                    1,
+                    30,
+                    128
+                  ],
+                  "macs": 2081280,
+                  "flops": 4162560
+                },
+                {
+                  "op": "linear",
+                  "block": "cross_attention",
+                  "name": "layers.0.radar_ffn.net.1",
+                  "in_shape": [
+                    1,
+                    30,
+                    128
+                  ],
+                  "out_shape": [
+                    1,
+                    30,
+                    512
+                  ],
+                  "macs": 1966080,
+                  "flops": 3932160
+                },
+                {
+                  "op": "linear",
+                  "block": "cross_attention",
+                  "name": "layers.0.radar_ffn.net.4",
+                  "in_shape": [
+                    1,
+                    30,
+                    512
+                  ],
+                  "out_shape": [
+                    1,
+                    30,
+                    128
+                  ],
+                  "macs": 1966080,
+                  "flops": 3932160
+                },
+                {
+                  "op": "linear",
+                  "block": "cross_attention",
+                  "name": "layers.0.camera_ffn.net.1",
+                  "in_shape": [
+                    1,
+                    30,
+                    128
+                  ],
+                  "out_shape": [
+                    1,
+                    30,
+                    512
+                  ],
+                  "macs": 1966080,
+                  "flops": 3932160
+                },
+                {
+                  "op": "linear",
+                  "block": "cross_attention",
+                  "name": "layers.0.camera_ffn.net.4",
+                  "in_shape": [
+                    1,
+                    30,
+                    512
+                  ],
+                  "out_shape": [
+                    1,
+                    30,
+                    128
+                  ],
+                  "macs": 1966080,
+                  "flops": 3932160
+                },
+                {
+                  "op": "multihead_attention",
+                  "block": "cross_attention",
+                  "name": "layers.1.radar_to_camera",
+                  "in_shape": [
+                    1,
+                    30,
+                    128
+                  ],
+                  "macs": 2081280,
+                  "flops": 4162560
+                },
+                {
+                  "op": "multihead_attention",
+                  "block": "cross_attention",
+                  "name": "layers.1.camera_to_radar",
+                  "in_shape": [
+                    1,
+                    30,
+                    128
+                  ],
+                  "macs": 2081280,
+                  "flops": 4162560
+                },
+                {
+                  "op": "linear",
+                  "block": "cross_attention",
+                  "name": "layers.1.radar_ffn.net.1",
+                  "in_shape": [
+                    1,
+                    30,
+                    128
+                  ],
+                  "out_shape": [
+                    1,
+                    30,
+                    512
+                  ],
+                  "macs": 1966080,
+                  "flops": 3932160
+                },
+                {
+                  "op": "linear",
+                  "block": "cross_attention",
+                  "name": "layers.1.radar_ffn.net.4",
+                  "in_shape": [
+                    1,
+                    30,
+                    512
+                  ],
+                  "out_shape": [
+                    1,
+                    30,
+                    128
+                  ],
+                  "macs": 1966080,
+                  "flops": 3932160
+                },
+                {
+                  "op": "linear",
+                  "block": "cross_attention",
+                  "name": "layers.1.camera_ffn.net.1",
+                  "in_shape": [
+                    1,
+                    30,
+                    128
+                  ],
+                  "out_shape": [
+                    1,
+                    30,
+                    512
+                  ],
+                  "macs": 1966080,
+                  "flops": 3932160
+                },
+                {
+                  "op": "linear",
+                  "block": "cross_attention",
+                  "name": "layers.1.camera_ffn.net.4",
+                  "in_shape": [
+                    1,
+                    30,
+                    512
+                  ],
+                  "out_shape": [
+                    1,
+                    30,
+                    128
+                  ],
+                  "macs": 1966080,
+                  "flops": 3932160
+                }
+              ]
+            },
+            "head": {
+              "macs": 66176,
+              "flops": 132352,
+              "mops": 0.066176,
+              "mmacs": 0.066176,
+              "mflops": 0.132352,
+              "gflops": 0.000132352,
+              "ops": 6,
+              "macs_by_op": {
+                "linear": 66176
+              },
+              "mops_by_op": {
+                "linear": 0.066176
+              },
+              "layers": [
+                {
+                  "op": "linear",
+                  "block": "head",
+                  "name": "shared_proj.1",
+                  "in_shape": [
+                    1,
+                    128
+                  ],
+                  "out_shape": [
+                    1,
+                    128
+                  ],
+                  "macs": 16384,
+                  "flops": 32768
+                },
+                {
+                  "op": "linear",
+                  "block": "head",
+                  "name": "shared_proj.1",
+                  "in_shape": [
+                    1,
+                    128
+                  ],
+                  "out_shape": [
+                    1,
+                    128
+                  ],
+                  "macs": 16384,
+                  "flops": 32768
+                },
+                {
+                  "op": "linear",
+                  "block": "head",
+                  "name": "activity_classifier.1",
+                  "in_shape": [
+                    1,
+                    128
+                  ],
+                  "out_shape": [
+                    1,
+                    128
+                  ],
+                  "macs": 16384,
+                  "flops": 32768
+                },
+                {
+                  "op": "linear",
+                  "block": "head",
+                  "name": "activity_classifier.4",
+                  "in_shape": [
+                    1,
+                    128
+                  ],
+                  "out_shape": [
+                    1,
+                    3
+                  ],
+                  "macs": 384,
+                  "flops": 768
+                },
+                {
+                  "op": "linear",
+                  "block": "head",
+                  "name": "human_classifier.1",
+                  "in_shape": [
+                    1,
+                    128
+                  ],
+                  "out_shape": [
+                    1,
+                    128
+                  ],
+                  "macs": 16384,
+                  "flops": 32768
+                },
+                {
+                  "op": "linear",
+                  "block": "head",
+                  "name": "human_classifier.4",
+                  "in_shape": [
+                    1,
+                    128
+                  ],
+                  "out_shape": [
+                    1,
+                    2
+                  ],
+                  "macs": 256,
+                  "flops": 512
+                }
+              ]
+            }
+          }
+        }
+      },
+      "latency": {
+        "runs": 30.0,
+        "warmup": 5.0,
+        "latency_ms_mean": 27.819124900088354,
+        "latency_ms_std": 5.999383416197705,
+        "latency_ms_min": 19.129676999000367,
+        "latency_ms_max": 49.325166999551584,
+        "latency_ms_p50": 24.7327104998476,
+        "latency_ms_p95": 36.587321950537415,
+        "latency_ms_p99": 46.888761579702994,
+        "throughput_fps": 35.94649377331147
+      },
+      "performance": {
+        "achieved_mops_per_s": 148786.4924171951,
+        "achieved_gflops_per_s": 297.57298483439024,
+        "conv2d_mops_per_s": 147487.1411209261,
+        "temporal_transformer_mops_per_s": 432.3241670323642,
+        "note": "achieved_* = theoretical ops / measured mean inference latency on live data windows"
+      }
+    }
+  ]
+}
