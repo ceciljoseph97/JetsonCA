@@ -5,10 +5,6 @@ __pycache__/
 .venv/
 venv/
 .env
-artifacts/*.onnx
-artifacts/*.trt
-artifacts/*.engine
-artifacts/benchmark_*.json
 !artifacts/best_multimodal_crossattention.pt
 recordings/
 data/
