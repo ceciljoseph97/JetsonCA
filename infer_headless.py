@@ -63,6 +63,8 @@ def parse_args():
   p.add_argument("--window", type=int, default=30)
   p.add_argument("--detect-threshold", type=float, default=0.35)
   p.add_argument("--human-threshold", type=float, default=0.5)
+  p.add_argument("--live-detector-preprocess", action="store_true",
+                 help="Apply train-time CFAR/ROI live (slow on Jetson)")
   p.add_argument("--min-range-m", type=float, default=0.3)
   p.add_argument("--max-range-m", type=float, default=2.5)
   p.add_argument("--duration-s", type=float, default=0.0, help="0 = run until Ctrl+C")
@@ -81,8 +83,10 @@ def main():
   image_size = int(config["image_size"])
   window = int(args.window)
   fuse_mode = str(config.get("dual_radar_fuse", "none")) if args.dual_radar_fuse == "auto" else args.dual_radar_fuse
-  detector_preprocess = bool(config.get("detector_preprocess", False))
+  detector_preprocess = False  # live CFAR is opt-in; train flag alone is too slow on Jetson
   detector_min_snr_db = float(config.get("detector_min_snr_db", 6.0))
+  if bool(getattr(args, "live_detector_preprocess", False)):
+    detector_preprocess = True
 
   radar1_buf: deque[torch.Tensor] = deque(maxlen=window)
   radar2_buf: deque[torch.Tensor] = deque(maxlen=window)

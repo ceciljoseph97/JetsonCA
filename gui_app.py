@@ -122,6 +122,8 @@ class InferenceWorker:
     peak_ratio: float = 5.0,
     min_range_m: float,
     max_range_m: float | None,
+    live_detector_preprocess: bool = False,
+    use_motion_gate: bool = False,
   ):
     self.model, self.labels, self.config = load_checkpoint(checkpoint, device)
     self.model.eval()
@@ -146,12 +148,14 @@ class InferenceWorker:
       max_range_m if max_range_m is not None else self.config.get("max_range_m", self.profile_metrics["max_range_m"])
     )
     self.image_size = int(self.config["image_size"])
-    self.detector_preprocess = bool(self.config.get("detector_preprocess", False))
+    # Train-time CFAR/ROI is expensive on Jetson; off unless explicitly enabled live.
+    self.detector_preprocess = bool(live_detector_preprocess)
     self.detector_cam_crop = bool(self.config.get("detector_cam_crop", True))
     self.detector_min_snr_db = float(self.config.get("detector_min_snr_db", 6.0))
-    self.enable_detect_head = bool(self.config.get("enable_detect_head", False)) or (
+    self.enable_detect_head = bool(self.config.get("has_detect_head") or self.config.get("enable_detect_head", False)) or (
       getattr(self.model, "detect_classifier", None) is not None
     )
+    self.use_motion_gate = bool(use_motion_gate) and not self.enable_detect_head
 
     self.stop_event = threading.Event()
     self.state_lock = threading.Lock()
@@ -182,6 +186,7 @@ class InferenceWorker:
       "human_prob": 0.0,
       "detect_prob": 0.0,
       "gate_open": False,
+      "motion_ok": True,
       "latency_ms": 0.0,
       "fps": 0.0,
       "radar_status": "off" if no_radar else "not started",
@@ -256,15 +261,29 @@ class InferenceWorker:
         probs = combine_hierarchical_probs(self.labels, probs, coarse_probs, subaction_probs)
       probs = apply_logit_bias(probs, self.labels, self.logit_bias)
       human_prob, detect_prob = self._presence_probs(out)
+      # With learned DETECT, classical Doppler motion must not override class selection
+      # (standing / slow motion still has a person → DETECT high, motion gate false).
+      motion_ok = True
+      if self.use_motion_gate and radar_present:
+        motion_ok = bool(getattr(self, "_cached_radar_motion", True))
+      presence = detect_prob if self.enable_detect_head else human_prob
       label, conf = inference_label(
         self.labels,
-        human_prob,
+        presence,
         probs,
-        human_threshold=self.human_threshold,
+        human_threshold=self.human_threshold if not self.enable_detect_head else min(self.human_threshold, self.detect_threshold),
         min_margin=self.min_margin,
-        motion_ok=getattr(self, "_cached_radar_motion", True) if radar_present else True,
+        motion_ok=motion_ok,
         in_range=(not self.require_in_range) or (not radar_present) or getattr(self, "_cached_in_range", True),
       )
+      # Near-ties: still expose top activity so bars and prediction agree.
+      if label in ("uncertain", "background") and self.enable_detect_head and detect_prob >= self.detect_threshold:
+        activity_labels = [x for x in self.labels if x not in ("background", "no_human", "empty", "idle")]
+        p = np.asarray(probs, dtype=np.float32).reshape(-1)
+        if p.size and activity_labels:
+          top = int(np.argmax(p[: len(activity_labels)]))
+          label = activity_labels[top]
+          conf = float(p[top])
       return probs, label, conf, human_prob, detect_prob
 
   def _smooth_label(self, label: str) -> str:
@@ -489,12 +508,20 @@ class InferenceWorker:
         prediction = label
         confidence = conf
         raw_prediction = label
-        if not gate_open or label == "uncertain":
+        suppress_reason = ""
+        if not gate_open:
           prediction = "none"
+          suppress_reason = f"gate closed (det={detect_prob:.2f})"
+        elif label == "uncertain":
+          prediction = "none"
+          suppress_reason = "low margin"
         if self.require_in_range and radar_on and not in_range:
           prediction = "none"
+          suppress_reason = f"out of range ({target_range_m:.2f}m)"
         prediction = self._smooth_label(prediction)
         hierarchy_text = format_hierarchy(raw_prediction, conf)
+        if suppress_reason:
+          hierarchy_text = f"{hierarchy_text}\n[{suppress_reason}]"
 
       radar_status = "off"
       if radar_session is not None:
@@ -513,6 +540,7 @@ class InferenceWorker:
             "human_prob": human_prob,
             "detect_prob": detect_prob,
             "gate_open": gate_open,
+            "motion_ok": bool(getattr(self, "_cached_radar_motion", True)),
             "latency_ms": latency_ms,
             "fps": n_infer / max(time.time() - t0, 1e-6),
             "radar_status": radar_status,
@@ -585,6 +613,8 @@ def _worker_from_args(args: argparse.Namespace, *, detect_threshold: float, huma
     peak_ratio=args.peak_ratio,
     min_range_m=args.min_range_m,
     max_range_m=args.max_range_m,
+    live_detector_preprocess=bool(args.live_detector_preprocess),
+    use_motion_gate=bool(args.use_motion_gate),
   )
 
 
@@ -836,15 +866,19 @@ def parse_args():
   p.add_argument("--detect-threshold", type=float, default=0.55,
                  help="GATE threshold on detect_prob (learned detect head, else human fallback)")
   p.add_argument("--human-threshold", type=float, default=0.55)
-  p.add_argument("--min-margin", type=float, default=0.12,
-                 help="Require top1-top2 prob margin; else treat as uncertain/none")
+  p.add_argument("--min-margin", type=float, default=0.0,
+                 help="Require top1-top2 prob margin; 0=always take argmax (default on Jetson)")
   p.add_argument("--smooth-n", type=int, default=5, help="Majority-vote window over recent labels")
-  p.add_argument("--towards-bias", type=float, default=0.35,
-                 help="Downweight walking_towards prior (0=off, ~0.3-0.7 typical)")
+  p.add_argument("--towards-bias", type=float, default=0.0,
+                 help="Downweight walking_towards prior (0=off)")
   p.add_argument("--motion-threshold", type=float, default=0.35,
-                 help="Min off-zero Doppler peak; idle scenes stay background")
+                 help="Only used with --use-motion-gate")
   p.add_argument("--peak-ratio", type=float, default=5.0,
-                 help="Min RD peak/median; idle noise is typically 2-4")
+                 help="Only used with --use-motion-gate")
+  p.add_argument("--use-motion-gate", action="store_true",
+                 help="Force classical Doppler motion gate (ignored when DETECT head is present)")
+  p.add_argument("--live-detector-preprocess", action="store_true",
+                 help="Apply train-time CFAR/ROI live (slow on Jetson; off by default)")
   p.add_argument("--no-range-gate", action="store_true",
                  help="Allow predictions even when radar peak is outside min/max range")
   p.add_argument("--min-range-m", type=float, default=0.3)

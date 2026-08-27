@@ -409,9 +409,12 @@ class DualRadarSession:
 
   def read_tensors(self) -> tuple[torch.Tensor | None, torch.Tensor | None]:
     tensors: list[torch.Tensor | None] = [None, None]
+    if not hasattr(self, "_last_tensors"):
+      self._last_tensors = [None, None]
     for idx, slot in enumerate(self.slots):
       if not slot.available or slot.device is None or slot.algo is None:
         self._miss_streak[idx] += 1
+        tensors[idx] = self._last_tensors[idx]
         continue
       try:
         raw = slot.device.get_next_frame()[0]
@@ -423,9 +426,16 @@ class DualRadarSession:
           min_range_m=self.min_range_m,
           max_range_m=self.max_range_m,
         )
+        self._last_tensors[idx] = tensors[idx]
         self._miss_streak[idx] = 0
       except ErrorFrameAcquisitionFailed:
         self._miss_streak[idx] += 1
+        tensors[idx] = self._last_tensors[idx]
+        continue
+      except Exception:
+        # FIFO overflow / USB glitch — keep last good frame so GUI doesn't freeze blank.
+        self._miss_streak[idx] += 1
+        tensors[idx] = self._last_tensors[idx]
         continue
 
     radar1 = tensors[0]
