@@ -258,7 +258,13 @@ class InferenceWorker:
           coarse_probs = F.softmax(out["coarse_logits"][0], dim=-1).detach().cpu().numpy()
         if out.get("subaction_logits") is not None:
           subaction_probs = F.softmax(out["subaction_logits"][0], dim=-1).detach().cpu().numpy()
-        probs = combine_hierarchical_probs(self.labels, probs, coarse_probs, subaction_probs)
+        probs = combine_hierarchical_probs(
+          self.labels,
+          probs,
+          coarse_probs,
+          subaction_probs,
+          hierarchy_labels=list(self.config.get("all_labels") or self.labels),
+        )
       probs = apply_logit_bias(probs, self.labels, self.logit_bias)
       human_prob, detect_prob = self._presence_probs(out)
       # With learned DETECT, classical Doppler motion must not override class selection

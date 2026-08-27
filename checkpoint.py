@@ -8,6 +8,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
+from label_hierarchy import is_background_label
 from model import MultiModalCrossAttentionNet
 
 
@@ -22,7 +23,12 @@ def load_checkpoint(path: Path | str, device: str):
   except TypeError:
     checkpoint = torch.load(path, map_location=device)
   config = dict(checkpoint["config"])
-  labels = checkpoint.get("activity_labels", checkpoint["labels"])
+  labels = list(checkpoint.get("activity_labels", checkpoint["labels"]))
+  all_labels = list(checkpoint.get("all_labels") or labels)
+  if not any(is_background_label(x) for x in all_labels):
+    all_labels = ["background", *labels]
+  config["all_labels"] = all_labels
+
   model = MultiModalCrossAttentionNet(
     num_classes=len(labels),
     num_activity_classes=_cfg_int(config, "num_activity_classes", len(labels)),

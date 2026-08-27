@@ -154,7 +154,13 @@ def main():
           coarse_probs = F.softmax(out["coarse_logits"][0], dim=-1).detach().cpu().numpy()
         if out.get("subaction_logits") is not None:
           subaction_probs = F.softmax(out["subaction_logits"][0], dim=-1).detach().cpu().numpy()
-        probs = combine_hierarchical_probs(labels, probs, coarse_probs, subaction_probs)
+        probs = combine_hierarchical_probs(
+          labels,
+          probs,
+          coarse_probs,
+          subaction_probs,
+          hierarchy_labels=list(config.get("all_labels") or labels),
+        )
       human_prob, detect_prob = _presence_probs(out)
 
     display, conf = inference_label(labels, human_prob, probs, human_threshold=args.human_threshold)
