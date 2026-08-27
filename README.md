@@ -8,17 +8,37 @@ Training / Tk GUI / large datasets stay in `../Crossattention`. This package is 
 
 | Path | Role |
 |---|---|
-| `model.py` | Multimodal cross-attention net |
+| `model.py` | Multimodal cross-attention net (dual radar encoders, reliability, detect/coarse/sub heads) |
+| `detector_pipeline.py` | Optional CFAR soft-mask + cam ROI (honors `detector_preprocess` in ckpt) |
 | `benchmark.py` | AI-DISCO KPI bench (synthetic or `--live`) |
 | `infer_headless.py` | Live inference, no GUI |
-| `gui_app.py` | Lightweight Tk GUI (cam + radar, no alignment) |
-| `export_onnx.py` | ONNX export → TensorRT |
+| `gui_app.py` | Lightweight Tk GUI (cam + radar; learned DETECT GATE) |
+| `export_onnx.py` | ONNX export → TensorRT (`radar`+`radar2`+detect/human outs) |
 | `jetson_env.py` | Tegra detect + thread/memory tweaks |
 | `realtime_multimodal.py` | Camera stream + checkpoint load |
 | `radar_*.py` / `range_*.py` | BGT radar path (needs Infineon SDK) |
-| `artifacts/best_multimodal_crossattention.pt` | Checkpoint |
+| `artifacts/best_multimodal_crossattention.pt` | Legacy 3-class edge ckpt (crossing + walks) |
+| `artifacts/best_multimodal_crossattention_detect.pt` | Current Crossattention walk+DETECT ckpt |
 
 **Not included:** `train.py`, full Crossattention GUI, `data/`, evaluation notebooks.
+
+## Architecture (synced with Crossattention)
+
+Edge runtime now matches the lab model contract:
+
+- Dual radar encoders + reliability softmax (`radar2=` forward arg)
+- Heads: activity · coarse · sub · human · **DETECT**
+- GATE = `softmax(detect_logits)[target] ≥ thr` (falls back to human if no detect head in ckpt)
+- `dual_radar_fuse=auto` reads ckpt (`none` preferred for reliability mix; `mean`/`max` early-fuse still supported)
+- Optional `detector_preprocess` CFAR soft-mask when present in ckpt config
+
+```bash
+# current Crossattention walk+DETECT weights
+python3 gui_app.py --checkpoint artifacts/best_multimodal_crossattention_detect.pt --device cuda
+
+# legacy 3-class edge weights (still loads; radar2 weights cloned from radar1)
+python3 gui_app.py --checkpoint artifacts/best_multimodal_crossattention.pt --device cuda
+```
 
 ## Setup on Jetson
 

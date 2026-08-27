@@ -121,3 +121,46 @@ def in_recognition_range(
   max_range_m: float,
 ) -> bool:
   return float(min_range_m) <= float(target_range_m) <= float(max_range_m)
+
+
+def _as_rd_hw(radar_tensor) -> np.ndarray:
+  tensor = np.asarray(radar_tensor, dtype=np.float32)
+  if hasattr(radar_tensor, "detach"):
+    tensor = radar_tensor.detach().cpu().numpy().astype(np.float32)
+  if tensor.ndim == 4:
+    tensor = tensor.max(axis=0)
+  if tensor.ndim == 3:
+    return tensor.max(axis=0)
+  if tensor.ndim == 2:
+    return tensor
+  return np.zeros((1, 1), dtype=np.float32)
+
+
+def radar_motion_stats(radar_tensor, *, zero_width: int = 2) -> dict[str, float]:
+  rd = _as_rd_hw(radar_tensor)
+  if rd.size == 0:
+    return {"off_zero_max": 0.0, "peak_to_median": 0.0, "peak": 0.0}
+  peak = float(rd.max())
+  median = float(np.median(rd))
+  mid = rd.shape[1] // 2
+  lo = max(0, mid - int(zero_width))
+  hi = min(rd.shape[1], mid + int(zero_width) + 1)
+  off = rd.copy()
+  off[:, lo:hi] = 0.0
+  return {
+    "off_zero_max": float(off.max()) if off.size else 0.0,
+    "peak_to_median": float(peak / max(median, 1e-6)),
+    "peak": peak,
+  }
+
+
+def has_radar_motion(
+  radar_tensor,
+  *,
+  motion_threshold: float = 0.35,
+  peak_ratio: float = 5.0,
+  zero_width: int = 2,
+) -> tuple[bool, dict[str, float]]:
+  stats = radar_motion_stats(radar_tensor, zero_width=zero_width)
+  moving = stats["off_zero_max"] >= float(motion_threshold) and stats["peak_to_median"] >= float(peak_ratio)
+  return moving, stats

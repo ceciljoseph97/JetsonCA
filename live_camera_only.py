@@ -104,7 +104,7 @@ def main():
 
       if warmup_left > 0:
         with torch.no_grad():
-          model(radar_t, camera_t, radar_present=radar_present, camera_present=camera_present)
+          model(radar_t, camera_t, radar2=radar_t, radar_present=radar_present, camera_present=camera_present)
         _sync(args.device)
         warmup_left -= 1
         continue
@@ -112,7 +112,7 @@ def main():
       _sync(args.device)
       t1 = time.perf_counter()
       with torch.no_grad():
-        out = model(radar_t, camera_t, radar_present=radar_present, camera_present=camera_present)
+        out = model(radar_t, camera_t, radar2=radar_t, radar_present=radar_present, camera_present=camera_present)
       _sync(args.device)
       dt_ms = (time.perf_counter() - t1) * 1000.0
       times_ms.append(dt_ms)
@@ -122,11 +122,15 @@ def main():
       logits = out.get("activity_logits", out.get("logits"))
       probs = F.softmax(logits, dim=-1)[0].detach().cpu().numpy()
       human_prob = 1.0
+      detect_prob = 1.0
       if out.get("human_logits") is not None:
         human_prob = float(F.softmax(out["human_logits"], dim=-1)[0, 1].item())
+        detect_prob = human_prob
+      if out.get("detect_logits") is not None:
+        detect_prob = float(F.softmax(out["detect_logits"], dim=-1)[0, 1].item())
       display, conf = inference_label(labels, human_prob, probs)
       raw = display
-      if conf < args.detect_threshold:
+      if detect_prob < args.detect_threshold:
         display, raw = "none", "none"
       row = {
         "t": time.time(),
@@ -134,6 +138,7 @@ def main():
         "raw_label": raw,
         "conf": conf,
         "human_prob": human_prob,
+        "detect_prob": detect_prob,
         "latency_ms": dt_ms,
         "probs": {labels[i]: float(probs[i]) for i in range(min(len(labels), len(probs)))},
         "radar_present": False,
@@ -168,17 +173,21 @@ def main():
         _sync(args.device)
         t1 = time.perf_counter()
         with torch.no_grad():
-          out = model(radar_t, camera_t, radar_present=radar_present, camera_present=camera_present)
+          out = model(radar_t, camera_t, radar2=radar_t, radar_present=radar_present, camera_present=camera_present)
         _sync(args.device)
         dt_ms = (time.perf_counter() - t1) * 1000.0
         n_infer += 1
         logits = out.get("activity_logits", out.get("logits"))
         probs = F.softmax(logits, dim=-1)[0].detach().cpu().numpy()
         human_prob = 1.0
+        detect_prob = 1.0
         if out.get("human_logits") is not None:
           human_prob = float(F.softmax(out["human_logits"], dim=-1)[0, 1].item())
+          detect_prob = human_prob
+        if out.get("detect_logits") is not None:
+          detect_prob = float(F.softmax(out["detect_logits"], dim=-1)[0, 1].item())
         display, conf = inference_label(labels, human_prob, probs)
-        if conf < args.detect_threshold:
+        if detect_prob < args.detect_threshold:
           display = "none"
         now = time.time()
         if now - last_print >= args.print_every:

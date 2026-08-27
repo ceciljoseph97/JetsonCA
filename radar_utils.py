@@ -51,20 +51,24 @@ def list_radar_ports() -> list[str]:
 def fuse_dual_radar_tensors(
   radar1: np.ndarray | torch.Tensor,
   radar2: np.ndarray | torch.Tensor | None,
-  mode: str = "mean",
+  mode: str = "none",
 ) -> np.ndarray | torch.Tensor:
-  """Fuse two radar clip/frame tensors for model input. Keeps shape (..., 3, H, W)."""
-  if radar2 is None:
+  """Optionally early-fuse two radars. mode=none keeps radar1 intact for dual-encoder models."""
+  if radar2 is None or mode in ("none", "radar1", "identity"):
     return radar1
   if isinstance(radar1, torch.Tensor):
     if mode == "max":
       return torch.maximum(radar1, radar2)
-    return 0.5 * (radar1 + radar2)
+    if mode == "mean":
+      return 0.5 * (radar1 + radar2)
+    raise ValueError(f"Unknown dual-radar fuse mode: {mode}")
   radar1_np = np.asarray(radar1, dtype=np.float32)
   radar2_np = np.asarray(radar2, dtype=np.float32)
   if mode == "max":
     return np.maximum(radar1_np, radar2_np)
-  return 0.5 * (radar1_np + radar2_np)
+  if mode == "mean":
+    return 0.5 * (radar1_np + radar2_np)
+  raise ValueError(f"Unknown dual-radar fuse mode: {mode}")
 
 
 def fuse_radar_streams_for_model(

@@ -13,17 +13,32 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from checkpoint import load_checkpoint
+from checkpoint import load_checkpoint, preprocess_camera_frame
 from jetson_env import apply_jetson_runtime_tweaks, default_device
-from label_hierarchy import inference_label
-from radar_utils import DualRadarSession, fuse_radar_streams_for_model
-from checkpoint import preprocess_camera_frame
+from label_hierarchy import combine_hierarchical_probs, inference_label
+from radar_utils import DualRadarSession, fuse_dual_radar_tensors, fuse_radar_streams_for_model
+
+try:
+  from detector_pipeline import apply_cfar_mask_to_radar_seq
+except Exception:  # pragma: no cover
+  apply_cfar_mask_to_radar_seq = None  # type: ignore[assignment]
 
 
 def _camera_stream_cls():
   from realtime_multimodal import CameraStream
 
   return CameraStream
+
+
+def _presence_probs(outputs: dict) -> tuple[float, float]:
+  human_prob = 1.0
+  detect_prob = 1.0
+  if outputs.get("human_logits") is not None:
+    human_prob = float(F.softmax(outputs["human_logits"][0], dim=-1)[1].item())
+    detect_prob = human_prob
+  if outputs.get("detect_logits") is not None:
+    detect_prob = float(F.softmax(outputs["detect_logits"][0], dim=-1)[1].item())
+  return human_prob, detect_prob
 
 
 def parse_args():
@@ -44,9 +59,10 @@ def parse_args():
   p.add_argument("--mirror-radar2", action="store_true", default=True)
   p.add_argument("--no-mirror-radar2", action="store_false", dest="mirror_radar2")
   p.add_argument("--no-radar", action="store_true", help="Camera-only live: skip radar SDK, radar_present=False")
-  p.add_argument("--dual-radar-fuse", choices=("mean", "max"), default="mean")
+  p.add_argument("--dual-radar-fuse", choices=("auto", "none", "mean", "max"), default="auto")
   p.add_argument("--window", type=int, default=30)
   p.add_argument("--detect-threshold", type=float, default=0.35)
+  p.add_argument("--human-threshold", type=float, default=0.5)
   p.add_argument("--min-range-m", type=float, default=0.3)
   p.add_argument("--max-range-m", type=float, default=2.5)
   p.add_argument("--duration-s", type=float, default=0.0, help="0 = run until Ctrl+C")
@@ -64,8 +80,12 @@ def main():
   model.eval()
   image_size = int(config["image_size"])
   window = int(args.window)
+  fuse_mode = str(config.get("dual_radar_fuse", "none")) if args.dual_radar_fuse == "auto" else args.dual_radar_fuse
+  detector_preprocess = bool(config.get("detector_preprocess", False))
+  detector_min_snr_db = float(config.get("detector_min_snr_db", 6.0))
 
-  radar_buf: deque[torch.Tensor] = deque(maxlen=window)
+  radar1_buf: deque[torch.Tensor] = deque(maxlen=window)
+  radar2_buf: deque[torch.Tensor] = deque(maxlen=window)
   camera_buf: deque[torch.Tensor] = deque(maxlen=window)
 
   camera = _camera_stream_cls()(
@@ -89,28 +109,54 @@ def main():
     if args.no_radar:
       if len(camera_buf) < window:
         return
-      radar = torch.zeros(1, window, 3, 32, 32, device=args.device)
+      radar_np = np.zeros((window, 3, 32, 32), dtype=np.float32)
+      radar2_np = radar_np
       radar_present = torch.zeros(1, dtype=torch.bool, device=args.device)
     else:
-      if len(radar_buf) < window or len(camera_buf) < window:
+      if len(radar1_buf) < window or len(camera_buf) < window:
         return
-      radar = torch.stack(list(radar_buf), dim=0).unsqueeze(0).to(args.device)
+      radar_np = torch.stack(list(radar1_buf), dim=0).numpy()
+      radar2_np = torch.stack(list(radar2_buf), dim=0).numpy() if len(radar2_buf) >= window else radar_np
+      radar_np = np.asarray(fuse_dual_radar_tensors(radar_np, radar2_np, mode=fuse_mode), dtype=np.float32)
       radar_present = torch.ones(1, dtype=torch.bool, device=args.device)
+
+    if detector_preprocess and apply_cfar_mask_to_radar_seq is not None:
+      radar_np = apply_cfar_mask_to_radar_seq(
+        radar_np, profile_max_range_m=float(args.max_range_m), min_snr_db=detector_min_snr_db
+      )
+      radar2_np = apply_cfar_mask_to_radar_seq(
+        radar2_np, profile_max_range_m=float(args.max_range_m), min_snr_db=detector_min_snr_db
+      )
 
     cam = torch.stack(list(camera_buf), dim=0).unsqueeze(0).to(args.device)
     camera_present = torch.ones(1, dtype=torch.bool, device=args.device)
+    radar = torch.from_numpy(np.asarray(radar_np, dtype=np.float32)).unsqueeze(0).to(args.device)
+    radar2 = torch.from_numpy(np.asarray(radar2_np, dtype=np.float32)).unsqueeze(0).to(args.device)
 
     with torch.no_grad():
-      out = model(radar, cam, radar_present=radar_present, camera_present=camera_present)
+      out = model(
+        radar,
+        cam,
+        radar2=radar2,
+        radar_present=radar_present,
+        camera_present=camera_present,
+      )
       logits = out["activity_logits"] if "activity_logits" in out else out["logits"]
       probs = F.softmax(logits, dim=-1)[0].detach().cpu().numpy()
-      human_prob = 1.0
-      if out.get("human_logits") is not None:
-        human_prob = float(F.softmax(out["human_logits"], dim=-1)[0, 1].item())
+      if config.get("use_hierarchical_fusion"):
+        coarse_probs = None
+        subaction_probs = None
+        if out.get("coarse_logits") is not None:
+          coarse_probs = F.softmax(out["coarse_logits"][0], dim=-1).detach().cpu().numpy()
+        if out.get("subaction_logits") is not None:
+          subaction_probs = F.softmax(out["subaction_logits"][0], dim=-1).detach().cpu().numpy()
+        probs = combine_hierarchical_probs(labels, probs, coarse_probs, subaction_probs)
+      human_prob, detect_prob = _presence_probs(out)
 
-    display, conf = inference_label(labels, human_prob, probs)
+    display, conf = inference_label(labels, human_prob, probs, human_threshold=args.human_threshold)
     label = display
-    if conf < args.detect_threshold:
+    gate_open = detect_prob >= args.detect_threshold
+    if not gate_open:
       display = "none"
       label = "none"
     n_infer += 1
@@ -122,9 +168,12 @@ def main():
       "raw_label": label,
       "conf": conf,
       "human_prob": human_prob,
-      "probs": {labels[i]: float(probs[i]) for i in range(len(labels))},
+      "detect_prob": detect_prob,
+      "gate_open": gate_open,
+      "probs": {labels[i]: float(probs[i]) for i in range(min(len(labels), len(probs)))},
       "radar_meta": meta,
       "radar_present": (not args.no_radar),
+      "fuse_mode": fuse_mode,
     }
     if jsonl is not None:
       jsonl.write(json.dumps(row) + "\n")
@@ -134,7 +183,7 @@ def main():
       last_print = now
       fps = n_infer / max(now - t0, 1e-6)
       print(
-        f"[{now - t0:6.1f}s] {display:16s} conf={conf:.2f}  "
+        f"[{now - t0:6.1f}s] {display:16s} detect={detect_prob:.2f} gate={'OPEN' if gate_open else 'closed'}  "
         f"infer_fps~{fps:.1f}  radar={'off' if args.no_radar else meta}"
       )
 
@@ -162,20 +211,25 @@ def main():
         min_range_m=args.min_range_m,
         max_range_m=args.max_range_m,
       ) as radars:
-        print(f"radar: {radars.status_text}")
+        print(f"radar: {radars.status_text} | fuse={fuse_mode}")
         while True:
           if args.duration_s > 0 and (time.time() - t0) >= args.duration_s:
             break
 
           r1, r2 = radars.read_tensors()
-          fused, meta = fuse_radar_streams_for_model(
+          _, meta = fuse_radar_streams_for_model(
             r1,
             r2,
-            mode=args.dual_radar_fuse,
+            mode=fuse_mode,
             mirror_radar2=args.mirror_radar2,
           )
-          if fused is not None:
-            radar_buf.append(fused.detach().cpu())
+          if r1 is not None:
+            radar1_buf.append(r1.detach().cpu())
+          r2_use = r2
+          if r2_use is None and r1 is not None and args.mirror_radar2:
+            r2_use = r1
+          if r2_use is not None:
+            radar2_buf.append(r2_use.detach().cpu())
 
           frame = camera.get_latest()
           if frame is not None:

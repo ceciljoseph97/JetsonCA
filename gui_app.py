@@ -26,14 +26,21 @@ from tkinter import ttk
 
 from checkpoint import load_checkpoint, preprocess_camera_frame
 from jetson_env import apply_jetson_runtime_tweaks, default_device
-from label_hierarchy import apply_logit_bias, format_hierarchy, inference_label
+from label_hierarchy import apply_logit_bias, combine_hierarchical_probs, format_hierarchy, inference_label
 from radar_utils import (
   DualRadarSession,
   combine_sensor_panels,
+  fuse_dual_radar_tensors,
   fuse_radar_streams_for_model,
   render_radar_panel,
 )
-from range_gating import estimate_peak_range_m, in_recognition_range, profile_metrics
+from range_gating import estimate_peak_range_m, has_radar_motion, in_recognition_range, profile_metrics
+
+try:
+  from detector_pipeline import apply_camera_roi_crop_seq, apply_cfar_mask_to_radar_seq
+except Exception:  # pragma: no cover - optional if cv2 missing
+  apply_camera_roi_crop_seq = None  # type: ignore[assignment]
+  apply_cfar_mask_to_radar_seq = None  # type: ignore[assignment]
 
 
 def _import_camera_stream():
@@ -102,7 +109,7 @@ class InferenceWorker:
     radar1_port: str | None,
     radar2_port: str | None,
     mirror_radar2: bool,
-    dual_radar_fuse: str,
+    dual_radar_fuse: str | None,
     no_radar: bool,
     window_len: int,
     detect_threshold: float,
@@ -111,6 +118,8 @@ class InferenceWorker:
     smooth_n: int = 5,
     require_in_range: bool = True,
     towards_bias: float = 0.35,
+    motion_threshold: float = 0.35,
+    peak_ratio: float = 5.0,
     min_range_m: float,
     max_range_m: float | None,
   ):
@@ -127,13 +136,22 @@ class InferenceWorker:
     self.radar1_port = radar1_port
     self.radar2_port = radar2_port
     self.mirror_radar2 = mirror_radar2
-    self.dual_radar_fuse = dual_radar_fuse
+    # Prefer CLI; fall back to checkpoint train config (Crossattention default: none).
+    self.dual_radar_fuse = str(dual_radar_fuse or self.config.get("dual_radar_fuse", "none"))
     self.no_radar = no_radar
     self.window_len = window_len
     self.profile_metrics = profile_metrics(radar_profile)
-    self.min_range_m = min_range_m
-    self.max_range_m = float(max_range_m if max_range_m is not None else self.profile_metrics["max_range_m"])
+    self.min_range_m = float(min_range_m if min_range_m is not None else self.config.get("min_range_m", 0.3))
+    self.max_range_m = float(
+      max_range_m if max_range_m is not None else self.config.get("max_range_m", self.profile_metrics["max_range_m"])
+    )
     self.image_size = int(self.config["image_size"])
+    self.detector_preprocess = bool(self.config.get("detector_preprocess", False))
+    self.detector_cam_crop = bool(self.config.get("detector_cam_crop", True))
+    self.detector_min_snr_db = float(self.config.get("detector_min_snr_db", 6.0))
+    self.enable_detect_head = bool(self.config.get("enable_detect_head", False)) or (
+      getattr(self.model, "detect_classifier", None) is not None
+    )
 
     self.stop_event = threading.Event()
     self.state_lock = threading.Lock()
@@ -143,12 +161,17 @@ class InferenceWorker:
     self.smooth_n = max(1, int(smooth_n))
     self.require_in_range = bool(require_in_range)
     self.logit_bias = {"walking_towards": float(towards_bias)} if towards_bias else {}
+    self.motion_threshold = float(motion_threshold)
+    self.peak_ratio = float(peak_ratio)
     self.pred_hist: deque[str] = deque(maxlen=self.smooth_n)
     self.radar_enabled = not no_radar
     self.camera_enabled = True
 
     self.camera_buffer: deque[torch.Tensor] = deque(maxlen=window_len)
+    self.camera_rgb_buffer: deque[np.ndarray] = deque(maxlen=window_len)
     self.radar_buffer: deque[torch.Tensor] = deque(maxlen=window_len)
+    self.radar1_buffer: deque[torch.Tensor] = deque(maxlen=window_len)
+    self.radar2_buffer: deque[torch.Tensor] = deque(maxlen=window_len)
 
     self.latest_state: dict[str, Any] = {
       "status": "idle",
@@ -157,6 +180,8 @@ class InferenceWorker:
       "hierarchy_text": "",
       "confidence": 0.0,
       "human_prob": 0.0,
+      "detect_prob": 0.0,
+      "gate_open": False,
       "latency_ms": 0.0,
       "fps": 0.0,
       "radar_status": "off" if no_radar else "not started",
@@ -191,6 +216,17 @@ class InferenceWorker:
   def stop(self):
     self.stop_event.set()
 
+  @staticmethod
+  def _presence_probs(outputs: dict) -> tuple[float, float]:
+    human_prob = 1.0
+    detect_prob = 1.0
+    if outputs.get("human_logits") is not None:
+      human_prob = float(F.softmax(outputs["human_logits"][0], dim=-1)[1].item())
+      detect_prob = human_prob
+    if outputs.get("detect_logits") is not None:
+      detect_prob = float(F.softmax(outputs["detect_logits"][0], dim=-1)[1].item())
+    return human_prob, detect_prob
+
   def _predict(
     self,
     radar_tensor: torch.Tensor,
@@ -198,28 +234,38 @@ class InferenceWorker:
     *,
     radar_present: bool,
     camera_present: bool,
-  ) -> tuple[np.ndarray, str, float, float]:
+    radar2_tensor: torch.Tensor | None = None,
+  ) -> tuple[np.ndarray, str, float, float, float]:
     with torch.no_grad():
       out = self.model(
         radar_tensor,
         camera_tensor,
+        radar2=radar2_tensor,
         radar_present=torch.tensor([radar_present], dtype=torch.bool, device=self.device),
         camera_present=torch.tensor([camera_present], dtype=torch.bool, device=self.device),
       )
       logits = out.get("activity_logits", out.get("logits"))
       probs = F.softmax(logits[0], dim=-1).detach().cpu().numpy()
+      coarse_probs = None
+      subaction_probs = None
+      if self.config.get("use_hierarchical_fusion"):
+        if out.get("coarse_logits") is not None:
+          coarse_probs = F.softmax(out["coarse_logits"][0], dim=-1).detach().cpu().numpy()
+        if out.get("subaction_logits") is not None:
+          subaction_probs = F.softmax(out["subaction_logits"][0], dim=-1).detach().cpu().numpy()
+        probs = combine_hierarchical_probs(self.labels, probs, coarse_probs, subaction_probs)
       probs = apply_logit_bias(probs, self.labels, self.logit_bias)
-      human_prob = 1.0
-      if out.get("human_logits") is not None:
-        human_prob = float(F.softmax(out["human_logits"][0], dim=-1)[1].item())
+      human_prob, detect_prob = self._presence_probs(out)
       label, conf = inference_label(
         self.labels,
         human_prob,
         probs,
         human_threshold=self.human_threshold,
         min_margin=self.min_margin,
+        motion_ok=getattr(self, "_cached_radar_motion", True) if radar_present else True,
+        in_range=(not self.require_in_range) or (not radar_present) or getattr(self, "_cached_in_range", True),
       )
-      return probs, label, conf, human_prob
+      return probs, label, conf, human_prob, detect_prob
 
   def _smooth_label(self, label: str) -> str:
     if label in ("none", "uncertain", "background", "-"):
@@ -266,9 +312,18 @@ class InferenceWorker:
       fuse_meta: dict[str, Any] = {"fusion": "none"}
       r1_panel = None
       r2_panel = None
+      r1_t = None
+      r2_t = None
 
       if radar_session is not None and radar_on:
         r1, r2 = radar_session.read_tensors()
+        r1_t, r2_t = r1, r2
+        if r2_t is None and r1_t is not None and self.mirror_radar2:
+          r2_t = r1_t
+        if r1_t is not None:
+          self.radar1_buffer.append(r1_t.detach().cpu())
+        if r2_t is not None:
+          self.radar2_buffer.append(r2_t.detach().cpu())
         fused_radar, fuse_meta = fuse_radar_streams_for_model(
           r1,
           r2,
@@ -289,6 +344,7 @@ class InferenceWorker:
         frame = camera.get_latest()
         if frame is not None:
           camera_rgb = frame
+          self.camera_rgb_buffer.append(np.asarray(frame))
           self.camera_buffer.append(preprocess_camera_frame(frame, self.image_size).cpu())
 
       radar_rgb = np.zeros((64, 64, 3), dtype=np.uint8)
@@ -301,7 +357,7 @@ class InferenceWorker:
           radar_rgb = r2_panel
 
       cam_ready = len(self.camera_buffer) >= self.window_len
-      rad_ready = len(self.radar_buffer) >= self.window_len
+      rad_ready = len(self.radar1_buffer) >= self.window_len or len(self.radar_buffer) >= self.window_len
 
       if camera_on and radar_on:
         can_predict = cam_ready and rad_ready
@@ -317,6 +373,8 @@ class InferenceWorker:
       hierarchy_text = ""
       confidence = 0.0
       human_prob = 0.0
+      detect_prob = 0.0
+      gate_open = False
       probs = np.zeros(len(self.labels), dtype=np.float32)
       latency_ms = 0.0
       target_range_m = 0.0
@@ -325,17 +383,21 @@ class InferenceWorker:
 
       if not can_predict:
         if camera_on and radar_on:
-          filled = min(len(self.camera_buffer), len(self.radar_buffer))
+          filled = min(len(self.camera_buffer), max(len(self.radar1_buffer), len(self.radar_buffer)))
         elif camera_on:
           filled = len(self.camera_buffer)
         else:
-          filled = len(self.radar_buffer)
+          filled = max(len(self.radar1_buffer), len(self.radar_buffer))
         status = f"warming up {filled}/{self.window_len}"
       else:
-        if radar_on and fused_radar is not None:
-          peak = fused_radar[-1] if fused_radar.ndim == 4 else fused_radar
+        peak_src = fused_radar
+        if peak_src is None and len(self.radar1_buffer) > 0:
+          peak_src = self.radar1_buffer[-1]
+        if radar_on and peak_src is not None:
+          peak = peak_src[-1] if getattr(peak_src, "ndim", 0) == 4 else peak_src
+          peak_np = peak.numpy() if isinstance(peak, torch.Tensor) else peak
           target_range_m = estimate_peak_range_m(
-            peak.numpy() if isinstance(peak, torch.Tensor) else peak,
+            peak_np,
             profile_max_range_m=self.profile_metrics["max_range_m"],
           )
           in_range = in_recognition_range(
@@ -343,39 +405,91 @@ class InferenceWorker:
             min_range_m=self.min_range_m,
             max_range_m=self.max_range_m,
           )
+          radar_motion, _ = has_radar_motion(
+            peak,
+            motion_threshold=self.motion_threshold,
+            peak_ratio=self.peak_ratio,
+          )
+          self._cached_in_range = in_range
+          self._cached_radar_motion = radar_motion
+        else:
+          self._cached_in_range = True
+          self._cached_radar_motion = True
+
+        if len(self.radar1_buffer) >= self.window_len:
+          radar_np = torch.stack(list(self.radar1_buffer), dim=0).numpy()
+        elif len(self.radar_buffer) >= self.window_len:
+          radar_np = torch.stack(list(self.radar_buffer), dim=0).numpy()
+        else:
+          radar_np = np.zeros((self.window_len, 3, 32, 32), dtype=np.float32)
+
+        if len(self.radar2_buffer) >= self.window_len:
+          radar2_np = torch.stack(list(self.radar2_buffer), dim=0).numpy()
+        else:
+          radar2_np = radar_np
+
+        # Early-fuse only when config asks; dual-encoder still gets radar2 separately.
+        radar_np = np.asarray(
+          fuse_dual_radar_tensors(radar_np, radar2_np, mode=self.dual_radar_fuse),
+          dtype=np.float32,
+        )
+
+        if self.detector_preprocess and apply_cfar_mask_to_radar_seq is not None:
+          profile_max = float(self.profile_metrics["max_range_m"])
+          radar_np = apply_cfar_mask_to_radar_seq(
+            radar_np, profile_max_range_m=profile_max, min_snr_db=self.detector_min_snr_db
+          )
+          radar2_np = apply_cfar_mask_to_radar_seq(
+            radar2_np, profile_max_range_m=profile_max, min_snr_db=self.detector_min_snr_db
+          )
+
+        if (
+          self.detector_preprocess
+          and self.detector_cam_crop
+          and apply_camera_roi_crop_seq is not None
+          and len(self.camera_rgb_buffer) >= self.window_len
+        ):
+          cam_rgb = apply_camera_roi_crop_seq(np.stack(list(self.camera_rgb_buffer), axis=0))
+          cam_tensors = [preprocess_camera_frame(fr, self.image_size).cpu() for fr in cam_rgb]
+          camera_t = torch.stack(cam_tensors, dim=0).unsqueeze(0).to(self.device)
+        elif camera_on and len(self.camera_buffer) >= self.window_len:
+          camera_t = torch.stack(list(self.camera_buffer), dim=0).unsqueeze(0).to(self.device)
+        else:
+          camera_t = torch.zeros(1, self.window_len, 3, self.image_size, self.image_size, device=self.device)
 
         if camera_on and radar_on:
-          radar_t = torch.stack(list(self.radar_buffer), dim=0).unsqueeze(0).to(self.device)
-          camera_t = torch.stack(list(self.camera_buffer), dim=0).unsqueeze(0).to(self.device)
           radar_present = True
           camera_present = True
         elif camera_on:
-          radar_t = torch.zeros(1, self.window_len, 3, 32, 32, device=self.device)
-          camera_t = torch.stack(list(self.camera_buffer), dim=0).unsqueeze(0).to(self.device)
           radar_present = False
           camera_present = True
+          radar_np = np.zeros((self.window_len, 3, 32, 32), dtype=np.float32)
+          radar2_np = radar_np
         else:
-          radar_t = torch.stack(list(self.radar_buffer), dim=0).unsqueeze(0).to(self.device)
-          camera_t = torch.zeros(1, self.window_len, 3, self.image_size, self.image_size, device=self.device)
           radar_present = True
           camera_present = False
 
+        radar_t = torch.from_numpy(np.asarray(radar_np, dtype=np.float32)).unsqueeze(0).to(self.device)
+        radar2_t = torch.from_numpy(np.asarray(radar2_np, dtype=np.float32)).unsqueeze(0).to(self.device)
+
         self._sync()
         t1 = time.perf_counter()
-        probs, label, conf, human_prob = self._predict(
+        probs, label, conf, human_prob, detect_prob = self._predict(
           radar_t,
           camera_t,
           radar_present=radar_present,
           camera_present=camera_present,
+          radar2_tensor=radar2_t,
         )
         self._sync()
         latency_ms = (time.perf_counter() - t1) * 1000.0
         n_infer += 1
 
+        gate_open = detect_prob >= threshold
         prediction = label
         confidence = conf
         raw_prediction = label
-        if conf < threshold or label == "uncertain":
+        if not gate_open or label == "uncertain":
           prediction = "none"
         if self.require_in_range and radar_on and not in_range:
           prediction = "none"
@@ -397,6 +511,8 @@ class InferenceWorker:
             "hierarchy_text": hierarchy_text,
             "confidence": confidence,
             "human_prob": human_prob,
+            "detect_prob": detect_prob,
+            "gate_open": gate_open,
             "latency_ms": latency_ms,
             "fps": n_infer / max(time.time() - t0, 1e-6),
             "radar_status": radar_status,
@@ -456,7 +572,7 @@ def _worker_from_args(args: argparse.Namespace, *, detect_threshold: float, huma
     radar1_port=args.radar1_port,
     radar2_port=args.radar2_port,
     mirror_radar2=args.mirror_radar2,
-    dual_radar_fuse=args.dual_radar_fuse,
+    dual_radar_fuse=None if args.dual_radar_fuse == "auto" else args.dual_radar_fuse,
     no_radar=args.no_radar,
     window_len=args.window,
     detect_threshold=detect_threshold,
@@ -465,6 +581,8 @@ def _worker_from_args(args: argparse.Namespace, *, detect_threshold: float, huma
     smooth_n=args.smooth_n,
     require_in_range=not args.no_range_gate,
     towards_bias=args.towards_bias,
+    motion_threshold=args.motion_threshold,
+    peak_ratio=args.peak_ratio,
     min_range_m=args.min_range_m,
     max_range_m=args.max_range_m,
   )
@@ -496,6 +614,8 @@ class JetsonGuiApp:
     self.radar_status_var = tk.StringVar(value="off")
     self.threshold_var = tk.StringVar(value=str(args.detect_threshold))
     self.human_threshold_var = tk.StringVar(value=str(args.human_threshold))
+    self.detect_var = tk.StringVar(value="detect=0.00")
+    self.gate_var = tk.StringVar(value="GATE closed")
     self.camera_enabled_var = tk.BooleanVar(value=True)
     self.radar_enabled_var = tk.BooleanVar(value=not args.no_radar)
 
@@ -550,6 +670,10 @@ class JetsonGuiApp:
     ttk.Label(pred_box, textvariable=self.conf_var).grid(row=2, column=1, sticky="w", pady=(6, 0))
     ttk.Label(pred_box, text="Raw (pre-smooth):").grid(row=3, column=0, sticky="w")
     ttk.Label(pred_box, textvariable=self.raw_var).grid(row=3, column=1, sticky="w")
+    ttk.Label(pred_box, textvariable=self.detect_var).grid(row=4, column=0, sticky="w", pady=(4, 0))
+    ttk.Label(pred_box, textvariable=self.gate_var, font=("Segoe UI", 10, "bold")).grid(
+      row=4, column=1, sticky="w", pady=(4, 0)
+    )
 
     ctrl = ttk.LabelFrame(right, text="Controls", padding=8)
     ctrl.grid(row=1, column=0, sticky="ew", pady=(0, 6))
@@ -659,6 +783,10 @@ class JetsonGuiApp:
     self.hierarchy_var.set(str(state.get("hierarchy_text", "")))
     self.conf_var.set(f"{conf:.2f}")
     self.raw_var.set(str(state.get("raw_prediction", "-")))
+    detect_p = float(state.get("detect_prob", 0.0))
+    gate_open = bool(state.get("gate_open", False))
+    self.detect_var.set(f"detect={detect_p:.2f}")
+    self.gate_var.set("GATE OPEN" if gate_open else "GATE closed")
     self.latency_var.set(f"{float(state['latency_ms']):.1f} ms  (~{float(state['fps']):.1f} infer/s)")
     target_range = float(state.get("target_range_m", 0.0))
     in_range = bool(state.get("in_range", False))
@@ -702,16 +830,21 @@ def parse_args():
   p.add_argument("--mirror-radar2", action="store_true", default=True)
   p.add_argument("--no-mirror-radar2", action="store_false", dest="mirror_radar2")
   p.add_argument("--no-radar", action="store_true", help="Camera-only: skip radar SDK")
-  p.add_argument("--dual-radar-fuse", choices=("mean", "max"), default="mean")
+  p.add_argument("--dual-radar-fuse", choices=("auto", "none", "mean", "max"), default="auto",
+                 help="auto = use checkpoint config (Crossattention train default: none)")
   p.add_argument("--window", type=int, default=30)
   p.add_argument("--detect-threshold", type=float, default=0.55,
-                 help="Suppress prediction if top conf below this (was 0.35; Crossattention uses 0.6)")
+                 help="GATE threshold on detect_prob (learned detect head, else human fallback)")
   p.add_argument("--human-threshold", type=float, default=0.55)
   p.add_argument("--min-margin", type=float, default=0.12,
                  help="Require top1-top2 prob margin; else treat as uncertain/none")
   p.add_argument("--smooth-n", type=int, default=5, help="Majority-vote window over recent labels")
   p.add_argument("--towards-bias", type=float, default=0.35,
                  help="Downweight walking_towards prior (0=off, ~0.3-0.7 typical)")
+  p.add_argument("--motion-threshold", type=float, default=0.35,
+                 help="Min off-zero Doppler peak; idle scenes stay background")
+  p.add_argument("--peak-ratio", type=float, default=5.0,
+                 help="Min RD peak/median; idle noise is typically 2-4")
   p.add_argument("--no-range-gate", action="store_true",
                  help="Allow predictions even when radar peak is outside min/max range")
   p.add_argument("--min-range-m", type=float, default=0.3)

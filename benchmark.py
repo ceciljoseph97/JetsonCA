@@ -710,18 +710,21 @@ def measure_latency(
   warmup: int,
   runs: int,
   device: torch.device,
+  radar2: torch.Tensor | None = None,
 ) -> dict[str, float]:
   model.eval()
+  if radar2 is None:
+    radar2 = radar
   with torch.no_grad():
     for _ in range(warmup):
-      model(radar, camera, radar_present=radar_present, camera_present=camera_present)
+      model(radar, camera, radar2=radar2, radar_present=radar_present, camera_present=camera_present)
     _sync(device)
 
     times_ms: list[float] = []
     for _ in range(runs):
       _sync(device)
       t0 = time.perf_counter()
-      model(radar, camera, radar_present=radar_present, camera_present=camera_present)
+      model(radar, camera, radar2=radar2, radar_present=radar_present, camera_present=camera_present)
       _sync(device)
       times_ms.append((time.perf_counter() - t0) * 1000.0)
 
@@ -761,10 +764,11 @@ def make_inputs(
   image_size: int,
   device: torch.device,
   dtype: torch.dtype = torch.float32,
-) -> tuple[torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
   radar = torch.randn(batch, window, 3, 32, 32, device=device, dtype=dtype)
+  radar2 = torch.randn(batch, window, 3, 32, 32, device=device, dtype=dtype)
   camera = torch.randn(batch, window, 3, image_size, image_size, device=device, dtype=dtype)
-  return radar, camera
+  return radar, radar2, camera
 
 
 def profile_mode(
@@ -778,7 +782,7 @@ def profile_mode(
   warmup: int,
   runs: int,
 ) -> dict[str, Any]:
-  radar, camera = make_inputs(batch=batch, window=window, image_size=image_size, device=device)
+  radar, radar2, camera = make_inputs(batch=batch, window=window, image_size=image_size, device=device)
   radar_on = mode in ("both", "radar_only")
   camera_on = mode in ("both", "camera_only")
   radar_present = torch.full((batch,), radar_on, dtype=torch.bool, device=device)
@@ -786,7 +790,7 @@ def profile_mode(
 
   with FlopCounter(model) as counter:
     with torch.no_grad():
-      model(radar, camera, radar_present=radar_present, camera_present=camera_present)
+      model(radar, camera, radar2=radar2, radar_present=radar_present, camera_present=camera_present)
   compute = counter.summary()
 
   latency = measure_latency(
@@ -798,6 +802,7 @@ def profile_mode(
     warmup=warmup,
     runs=runs,
     device=device,
+    radar2=radar2,
   )
 
   mean_s = latency["latency_ms_mean"] / 1000.0
@@ -814,6 +819,7 @@ def profile_mode(
       "batch": batch,
       "window": window,
       "radar_shape": list(radar.shape),
+      "radar2_shape": list(radar2.shape),
       "camera_shape": list(camera.shape),
       "radar_present": radar_on,
       "camera_present": camera_on,
@@ -865,6 +871,7 @@ def profile_live_mode(
 
   camera_buffer: deque[torch.Tensor] = deque(maxlen=window)
   radar_buffer: deque[torch.Tensor] = deque(maxlen=window)
+  radar2_buffer: deque[torch.Tensor] = deque(maxlen=window)
   radar_present = torch.tensor([not camera_only], dtype=torch.bool, device=device)
   camera_present = torch.ones((1,), dtype=torch.bool, device=device)
 
@@ -876,30 +883,37 @@ def profile_live_mode(
   warmup_remaining = int(warmup)
   measured = 0
 
-  def _run_forward(radar_t: torch.Tensor, camera_t: torch.Tensor) -> None:
+  def _run_forward(radar_t: torch.Tensor, camera_t: torch.Tensor, radar2_t: torch.Tensor | None = None) -> None:
     with torch.no_grad():
       model(
         radar_t,
         camera_t,
+        radar2=radar2_t if radar2_t is not None else radar_t,
         radar_present=radar_present,
         camera_present=camera_present,
       )
 
-  def _measure_once(radar_t: torch.Tensor, camera_t: torch.Tensor, *, t_loop0: float) -> None:
+  def _measure_once(
+    radar_t: torch.Tensor,
+    camera_t: torch.Tensor,
+    *,
+    t_loop0: float,
+    radar2_t: torch.Tensor | None = None,
+  ) -> None:
     nonlocal compute, measured, warmup_remaining
     if compute is None:
       with FlopCounter(model) as counter:
-        _run_forward(radar_t, camera_t)
+        _run_forward(radar_t, camera_t, radar2_t)
       compute = counter.summary()
 
     if warmup_remaining > 0:
-      _run_forward(radar_t, camera_t)
+      _run_forward(radar_t, camera_t, radar2_t)
       _sync(device)
       warmup_remaining -= 1
       return
 
     t0 = time.perf_counter()
-    _run_forward(radar_t, camera_t)
+    _run_forward(radar_t, camera_t, radar2_t)
     _sync(device)
     inference_ms = (time.perf_counter() - t0) * 1000.0
     stage_times["inference_ms"].append(inference_ms)
@@ -957,7 +971,7 @@ def profile_live_mode(
           fused_radar, fuse_meta = fuse_radar_streams_for_model(
             radar1,
             radar2,
-            mode="mean",
+            mode="none",
             mirror_radar2=mirror_radar2,
           )
           stage_times["radar_fuse_ms"].append((time.perf_counter() - t0) * 1000.0)
@@ -965,7 +979,9 @@ def profile_live_mode(
           latest_meta["status_text"] = radar_session.status_text
           latest_meta["camera_only"] = False
 
-          if fused_radar is None:
+          r1_use = radar1 if radar1 is not None else radar2
+          r2_use = radar2 if radar2 is not None else radar1
+          if r1_use is None:
             continue
 
           t0 = time.perf_counter()
@@ -975,14 +991,16 @@ def profile_live_mode(
           camera_tensor = preprocess_camera_frame(camera_rgb, image_size).cpu()
           stage_times["camera_fetch_preprocess_ms"].append((time.perf_counter() - t0) * 1000.0)
 
-          radar_buffer.append(fused_radar.cpu())
+          radar_buffer.append(r1_use.cpu())
+          radar2_buffer.append((r2_use if r2_use is not None else r1_use).cpu())
           camera_buffer.append(camera_tensor)
           if len(radar_buffer) < window or len(camera_buffer) < window:
             continue
 
           radar_t = torch.stack(list(radar_buffer), dim=0).unsqueeze(0).to(device)
+          radar2_t = torch.stack(list(radar2_buffer), dim=0).unsqueeze(0).to(device)
           camera_t = torch.stack(list(camera_buffer), dim=0).unsqueeze(0).to(device)
-          _measure_once(radar_t, camera_t, t_loop0=t_loop0)
+          _measure_once(radar_t, camera_t, t_loop0=t_loop0, radar2_t=radar2_t)
   finally:
     camera_stream.stop()
 

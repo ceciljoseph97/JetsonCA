@@ -129,15 +129,25 @@ class MultiModalCrossAttentionNet(nn.Module):
     temporal_mode: str = "transformer",
     num_activity_classes: int | None = None,
     enable_human_head: bool = True,
+    enable_detect_head: bool = True,
+    num_coarse_classes: int | None = None,
+    num_subaction_classes: int | None = None,
+    enable_reliability_gates: bool = True,
   ):
     super().__init__()
     self.modality_dropout = modality_dropout
     self.enable_human_head = enable_human_head
+    self.enable_detect_head = enable_detect_head
     self.num_activity_classes = num_activity_classes or num_classes
+    self.num_coarse_classes = num_coarse_classes or self.num_activity_classes
+    self.num_subaction_classes = num_subaction_classes or self.num_activity_classes
+    self.enable_reliability_gates = enable_reliability_gates
 
     self.radar_encoder = ConvFrameEncoder(radar_channels, model_dim)
+    self.radar2_encoder = ConvFrameEncoder(radar_channels, model_dim)
     self.camera_encoder = ConvFrameEncoder(camera_channels, model_dim)
     self.radar_temporal = TemporalEncoder(model_dim, mode=temporal_mode, dropout=dropout, num_heads=num_heads)
+    self.radar2_temporal = TemporalEncoder(model_dim, mode=temporal_mode, dropout=dropout, num_heads=num_heads)
     self.camera_temporal = TemporalEncoder(model_dim, mode=temporal_mode, dropout=dropout, num_heads=num_heads)
 
     self.radar_pos = nn.Parameter(torch.randn(1, max_len, model_dim) * 0.02)
@@ -155,6 +165,9 @@ class MultiModalCrossAttentionNet(nn.Module):
       nn.GELU(),
       nn.Dropout(dropout),
     )
+    self.radar1_quality = nn.Sequential(nn.LayerNorm(model_dim), nn.Linear(model_dim, 1))
+    self.radar2_quality = nn.Sequential(nn.LayerNorm(model_dim), nn.Linear(model_dim, 1))
+    self.camera_quality = nn.Sequential(nn.LayerNorm(model_dim), nn.Linear(model_dim, 1))
     self.activity_classifier = nn.Sequential(
       nn.LayerNorm(model_dim),
       nn.Linear(model_dim, model_dim),
@@ -162,10 +175,34 @@ class MultiModalCrossAttentionNet(nn.Module):
       nn.Dropout(dropout),
       nn.Linear(model_dim, self.num_activity_classes),
     )
+    self.coarse_classifier = nn.Sequential(
+      nn.LayerNorm(model_dim),
+      nn.Linear(model_dim, model_dim),
+      nn.GELU(),
+      nn.Dropout(dropout),
+      nn.Linear(model_dim, self.num_coarse_classes),
+    )
+    self.subaction_classifier = nn.Sequential(
+      nn.LayerNorm(model_dim),
+      nn.Linear(model_dim, model_dim),
+      nn.GELU(),
+      nn.Dropout(dropout),
+      nn.Linear(model_dim, self.num_subaction_classes),
+    )
     self.classifier = self.activity_classifier
     self.human_classifier = None
     if self.enable_human_head:
       self.human_classifier = nn.Sequential(
+        nn.LayerNorm(model_dim),
+        nn.Linear(model_dim, model_dim),
+        nn.GELU(),
+        nn.Dropout(dropout),
+        nn.Linear(model_dim, 2),
+      )
+    # Learned detect head (paper-style presence gate): 0=no target, 1=target present.
+    self.detect_classifier = None
+    if self.enable_detect_head:
+      self.detect_classifier = nn.Sequential(
         nn.LayerNorm(model_dim),
         nn.Linear(model_dim, model_dim),
         nn.GELU(),
@@ -206,6 +243,7 @@ class MultiModalCrossAttentionNet(nn.Module):
     self,
     radar: torch.Tensor,
     camera: torch.Tensor,
+    radar2: torch.Tensor | None = None,
     radar_present: torch.Tensor | None = None,
     camera_present: torch.Tensor | None = None,
   ) -> dict[str, torch.Tensor]:
@@ -220,18 +258,51 @@ class MultiModalCrossAttentionNet(nn.Module):
 
     radar_present, camera_present = self._apply_modality_dropout(radar_present, camera_present)
 
+    if radar2 is None:
+      radar2 = radar
+
     radar_tokens = self._encode_sequence(self.radar_encoder, radar)
+    radar2_tokens = self._encode_sequence(self.radar2_encoder, radar2)
     camera_tokens = self._encode_sequence(self.camera_encoder, camera)
 
     radar_tokens = radar_tokens + self.radar_pos[:, :radar_len] + self.radar_modality
+    radar2_tokens = radar2_tokens + self.radar_pos[:, :radar_len] + self.radar_modality
     camera_tokens = camera_tokens + self.camera_pos[:, :camera_len] + self.camera_modality
 
     radar_tokens = radar_tokens * radar_present[:, None, None].to(radar_tokens.dtype)
+    radar2_tokens = radar2_tokens * radar_present[:, None, None].to(radar2_tokens.dtype)
     camera_tokens = camera_tokens * camera_present[:, None, None].to(camera_tokens.dtype)
     radar_tokens = self.radar_temporal(radar_tokens)
+    radar2_tokens = self.radar2_temporal(radar2_tokens)
     camera_tokens = self.camera_temporal(camera_tokens)
     radar_tokens = radar_tokens * radar_present[:, None, None].to(radar_tokens.dtype)
+    radar2_tokens = radar2_tokens * radar_present[:, None, None].to(radar2_tokens.dtype)
     camera_tokens = camera_tokens * camera_present[:, None, None].to(camera_tokens.dtype)
+
+    radar1_shared_pre = self.shared_proj(radar_tokens.mean(dim=1))
+    radar2_shared_pre = self.shared_proj(radar2_tokens.mean(dim=1))
+    camera_shared_pre = self.shared_proj(camera_tokens.mean(dim=1))
+
+    if self.enable_reliability_gates:
+      quality_logits = torch.cat(
+        [
+          self.radar1_quality(radar1_shared_pre),
+          self.radar2_quality(radar2_shared_pre),
+          self.camera_quality(camera_shared_pre),
+        ],
+        dim=1,
+      )
+    else:
+      quality_logits = torch.zeros(batch_size, 3, device=device, dtype=radar_tokens.dtype)
+
+    modality_mask = torch.stack([radar_present, radar_present, camera_present], dim=1)
+    quality_logits = quality_logits.masked_fill(~modality_mask, -1e9)
+    quality_weights = torch.softmax(quality_logits, dim=1)
+    quality_weights = quality_weights * modality_mask.to(quality_weights.dtype)
+    quality_weights = quality_weights / quality_weights.sum(dim=1, keepdim=True).clamp_min(1e-6)
+
+    radar_mix = quality_weights[:, 0:1, None] * radar_tokens + quality_weights[:, 1:2, None] * radar2_tokens
+    radar_tokens = radar_mix
 
     for layer in self.layers:
       radar_tokens, camera_tokens = layer(radar_tokens, camera_tokens, radar_present, camera_present)
@@ -240,18 +311,27 @@ class MultiModalCrossAttentionNet(nn.Module):
 
     radar_shared = self.shared_proj(radar_tokens.mean(dim=1))
     camera_shared = self.shared_proj(camera_tokens.mean(dim=1))
+    radar1_shared = radar1_shared_pre
+    radar2_shared = radar2_shared_pre
 
-    present_count = radar_present.to(torch.float32) + camera_present.to(torch.float32)
-    present_count = present_count.clamp_min(1.0).unsqueeze(1)
     fused = (
-      radar_shared * radar_present[:, None].to(radar_shared.dtype)
-      + camera_shared * camera_present[:, None].to(camera_shared.dtype)
-    ) / present_count
+      radar_shared * quality_weights[:, 0:1]
+      + radar2_shared * quality_weights[:, 1:2]
+      + camera_shared * quality_weights[:, 2:3]
+    )
 
     logits = self.activity_classifier(fused)
+    coarse_logits = self.coarse_classifier(fused)
+    subaction_logits = self.subaction_classifier(fused)
     human_logits = None
     if self.human_classifier is not None:
       human_logits = self.human_classifier(fused)
+    detect_logits = None
+    if self.detect_classifier is not None:
+      detect_logits = self.detect_classifier(fused)
+    elif human_logits is not None:
+      # Backward-compat path when only human head exists in an old checkpoint.
+      detect_logits = human_logits
 
     align_mask = radar_present & camera_present
     if align_mask.any():
@@ -266,10 +346,16 @@ class MultiModalCrossAttentionNet(nn.Module):
     return {
       "logits": logits,
       "activity_logits": logits,
+      "coarse_logits": coarse_logits,
+      "subaction_logits": subaction_logits,
       "human_logits": human_logits,
+      "detect_logits": detect_logits,
       "fused": fused,
       "radar_shared": radar_shared,
+      "radar1_shared": radar1_shared,
+      "radar2_shared": radar2_shared,
       "camera_shared": camera_shared,
+      "quality_weights": quality_weights,
       "alignment_loss": alignment_loss,
       "radar_present": radar_present,
       "camera_present": camera_present,

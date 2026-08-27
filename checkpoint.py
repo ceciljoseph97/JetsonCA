@@ -11,16 +11,23 @@ import torch.nn.functional as F
 from model import MultiModalCrossAttentionNet
 
 
+def _cfg_int(config: dict, key: str, default: int) -> int:
+  value = config.get(key, default)
+  return default if value is None else int(value)
+
+
 def load_checkpoint(path: Path | str, device: str):
   try:
     checkpoint = torch.load(path, map_location=device, weights_only=False)
   except TypeError:
     checkpoint = torch.load(path, map_location=device)
-  config = checkpoint["config"]
+  config = dict(checkpoint["config"])
   labels = checkpoint.get("activity_labels", checkpoint["labels"])
   model = MultiModalCrossAttentionNet(
     num_classes=len(labels),
-    num_activity_classes=int(config.get("num_activity_classes", len(labels))),
+    num_activity_classes=_cfg_int(config, "num_activity_classes", len(labels)),
+    num_coarse_classes=_cfg_int(config, "num_coarse_classes", len(labels)),
+    num_subaction_classes=_cfg_int(config, "num_subaction_classes", len(labels)),
     model_dim=int(config["model_dim"]),
     num_heads=int(config["num_heads"]),
     num_layers=int(config["num_layers"]),
@@ -28,6 +35,8 @@ def load_checkpoint(path: Path | str, device: str):
     modality_dropout=0.0,
     temporal_mode=str(config.get("temporal_mode", "none")),
     enable_human_head=bool(config.get("enable_human_head", False)),
+    enable_detect_head=bool(config.get("enable_detect_head", False)),
+    enable_reliability_gates=bool(config.get("enable_reliability_gates", False)),
   ).to(device)
 
   state = dict(checkpoint["model_state"])
@@ -37,7 +46,20 @@ def load_checkpoint(path: Path | str, device: str):
       remapped[key.replace("classifier.", "activity_classifier.", 1)] = value
     else:
       remapped[key] = value
-  model.load_state_dict(remapped, strict=False)
+
+  missing, _unexpected = model.load_state_dict(remapped, strict=False)
+  # Legacy single-radar ckpts: clone radar1 → radar2 so dual-encoder path is sane.
+  if any(k.startswith("radar2_encoder.") for k in missing):
+    model.radar2_encoder.load_state_dict(model.radar_encoder.state_dict())
+  if any(k.startswith("radar2_temporal.") for k in missing):
+    model.radar2_temporal.load_state_dict(model.radar_temporal.state_dict())
+
+  # Only fuse hierarchy when trained coarse/sub heads exist in the checkpoint.
+  config["use_hierarchical_fusion"] = any(k.startswith("coarse_classifier.") for k in remapped)
+  config["has_detect_head"] = any(k.startswith("detect_classifier.") for k in remapped) or bool(
+    config.get("enable_detect_head", False)
+  )
+
   model.eval()
   return model, labels, config
 

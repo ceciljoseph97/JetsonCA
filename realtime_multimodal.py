@@ -501,12 +501,25 @@ class LivePredictionPipeline:
     camera_present = torch.tensor([camera_enabled], dtype=torch.bool, device=self.device)
 
     with torch.no_grad():
-      outputs = self.model(radar_tensor, camera_tensor, radar_present=radar_present, camera_present=camera_present)
+      outputs = self.model(
+        radar_tensor,
+        camera_tensor,
+        radar2=radar_tensor,
+        radar_present=radar_present,
+        camera_present=camera_present,
+      )
       probs = F.softmax(outputs["logits"][0], dim=-1).detach().cpu().numpy()
+      detect_prob = 1.0
+      if outputs.get("detect_logits") is not None:
+        detect_prob = float(F.softmax(outputs["detect_logits"][0], dim=-1)[1].item())
+      elif outputs.get("human_logits") is not None:
+        detect_prob = float(F.softmax(outputs["human_logits"][0], dim=-1)[1].item())
 
     top_idx = int(np.argmax(probs))
     top_label = self.labels[top_idx]
-    prediction_text = f"pred={top_label} conf={probs[top_idx]:.2f}"
+    prediction_text = f"pred={top_label} conf={probs[top_idx]:.2f} detect={detect_prob:.2f}"
+    if detect_prob >= self.detect_threshold:
+      prediction_text += " GATE"
     return probs, prediction_text
 
   def run(self):
@@ -559,8 +572,6 @@ class LivePredictionPipeline:
           if len(self.radar_buffer) == self.radar_buffer.maxlen and len(self.camera_buffer) == self.camera_buffer.maxlen:
             probs, prediction_text = self._predict()
             self.last_probs = probs
-            if float(probs.max()) >= self.detect_threshold:
-              prediction_text += " DETECT"
 
           if self.visualizer is not None:
             camera_enabled, radar_enabled = self._current_modalities()
