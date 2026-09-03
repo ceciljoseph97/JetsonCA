@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Lightweight Tk GUI for Jetson cam+radar inference (no alignment / dual-cam)."""
+"""Simplified Testing + Realtime GUI (Crossattention subset) for Jetson / desktop."""
 
 from __future__ import annotations
 
@@ -24,14 +24,18 @@ import tkinter as tk
 from PIL import Image, ImageDraw, ImageFont, ImageTk
 from tkinter import ttk
 
+from audio_features import mel_tensor_from_wave, render_audio_monitor_rgb
 from checkpoint import load_checkpoint, preprocess_camera_frame
+from device_select import prefer_microsoft
 from jetson_env import apply_jetson_runtime_tweaks, default_device
 from label_hierarchy import apply_logit_bias, combine_hierarchical_probs, format_hierarchy, inference_label
+from live_audio import LiveAudioBuffer, list_audio_input_devices
 from radar_utils import (
   DualRadarSession,
   combine_sensor_panels,
   fuse_dual_radar_tensors,
   fuse_radar_streams_for_model,
+  list_radar_uuids,
   render_radar_panel,
 )
 from range_gating import estimate_peak_range_m, has_radar_motion, in_recognition_range, profile_metrics
@@ -46,9 +50,9 @@ except Exception:  # pragma: no cover - optional if cv2 missing
 def _import_camera_stream():
   """Import CameraStream after LD_LIBRARY_PATH is fixed; give a clear CXXABI hint."""
   try:
-    from realtime_multimodal import CameraStream, get_version_full
+    from realtime_multimodal import CameraStream, get_version_full, probe_camera_devices
 
-    return CameraStream, get_version_full
+    return CameraStream, get_version_full, probe_camera_devices
   except ImportError as exc:
     msg = str(exc)
     if "CXXABI" in msg or "libstdc++" in msg:
@@ -64,7 +68,7 @@ def _import_camera_stream():
     raise
 
 
-CameraStream, get_version_full = _import_camera_stream()
+CameraStream, get_version_full, probe_camera_devices = _import_camera_stream()
 
 
 def _placeholder_rgb(message: str, width: int = 640, height: int = 360) -> np.ndarray:
@@ -108,9 +112,12 @@ class InferenceWorker:
     frame_rate: float,
     radar1_port: str | None,
     radar2_port: str | None,
+    radar1_uuid: str | None = None,
+    radar2_uuid: str | None = None,
     mirror_radar2: bool,
     dual_radar_fuse: str | None,
     no_radar: bool,
+    no_audio: bool = False,
     window_len: int,
     detect_threshold: float,
     human_threshold: float,
@@ -137,10 +144,13 @@ class InferenceWorker:
     self.frame_rate = frame_rate
     self.radar1_port = radar1_port
     self.radar2_port = radar2_port
+    self.radar1_uuid = radar1_uuid
+    self.radar2_uuid = radar2_uuid
     self.mirror_radar2 = mirror_radar2
     # Prefer CLI; fall back to checkpoint train config (Crossattention default: none).
     self.dual_radar_fuse = str(dual_radar_fuse or self.config.get("dual_radar_fuse", "none"))
     self.no_radar = no_radar
+    self.no_audio = no_audio
     self.window_len = window_len
     self.profile_metrics = profile_metrics(radar_profile)
     self.min_range_m = float(min_range_m if min_range_m is not None else self.config.get("min_range_m", 0.3))
@@ -170,6 +180,14 @@ class InferenceWorker:
     self.pred_hist: deque[str] = deque(maxlen=self.smooth_n)
     self.radar_enabled = not no_radar
     self.camera_enabled = True
+    self.enable_audio = bool(self.config.get("enable_audio", False)) and not no_audio
+    self.audio_sample_rate = int(self.config.get("audio_sample_rate", 16000) or 16000)
+    self.audio_n_mels = int(self.config.get("audio_n_mels", 32))
+    self.audio_mel_width = int(self.config.get("audio_mel_width", 32))
+    self.audio_buffer = LiveAudioBuffer(sample_rate=self.audio_sample_rate)
+    self.audio_device_index: int | None = None
+    self.audio_input_enabled = True
+    self.audio_enabled = bool(self.enable_audio)
 
     self.camera_buffer: deque[torch.Tensor] = deque(maxlen=window_len)
     self.camera_rgb_buffer: deque[np.ndarray] = deque(maxlen=window_len)
@@ -195,6 +213,9 @@ class InferenceWorker:
       "probs": np.zeros(len(self.labels), dtype=np.float32),
       "camera_rgb": _placeholder_rgb("Camera idle", camera_width, camera_height),
       "radar_rgb": np.zeros((64, 64, 3), dtype=np.uint8),
+      "audio_rgb": _placeholder_rgb("Audio idle", 320, 180),
+      "audio_verify_text": "off",
+      "reliance": {"camera": 0.0, "radar": 0.0, "audio": 0.0},
     }
 
   def set_threshold(self, value: float):
@@ -205,10 +226,17 @@ class InferenceWorker:
     with self.state_lock:
       self.human_threshold = float(value)
 
-  def set_modalities(self, *, camera: bool, radar: bool):
+  def set_modalities(self, *, camera: bool, radar: bool, audio: bool | None = None):
     with self.state_lock:
       self.camera_enabled = bool(camera)
       self.radar_enabled = bool(radar) and not self.no_radar
+      if audio is not None:
+        self.audio_enabled = bool(audio) and self.enable_audio
+
+  def set_audio_device(self, device_index: int | None, *, input_enabled: bool = True):
+    with self.state_lock:
+      self.audio_device_index = device_index
+      self.audio_input_enabled = bool(input_enabled)
 
   def get_state(self) -> dict[str, Any]:
     with self.state_lock:
@@ -216,10 +244,80 @@ class InferenceWorker:
       state["probs"] = np.asarray(self.latest_state["probs"], dtype=np.float32).copy()
       state["camera_rgb"] = np.asarray(self.latest_state["camera_rgb"]).copy()
       state["radar_rgb"] = np.asarray(self.latest_state["radar_rgb"]).copy()
+      state["audio_rgb"] = np.asarray(self.latest_state["audio_rgb"]).copy()
+      state["reliance"] = dict(self.latest_state.get("reliance") or {})
       return state
 
   def stop(self):
     self.stop_event.set()
+
+  def _live_audio_wave(self) -> np.ndarray:
+    wave = self.audio_buffer.snapshot()
+    if wave.size == 0:
+      return wave
+    win_s = float(self.window_len) / max(float(self.frame_rate), 1e-6)
+    n_keep = max(1, int(np.ceil((win_s + 0.35) * self.audio_sample_rate)))
+    if wave.size > n_keep:
+      return wave[-n_keep:]
+    return wave
+
+  def _build_audio_tensor(self) -> tuple[torch.Tensor | None, bool]:
+    if not self.enable_audio:
+      return None, False
+    wave = self._live_audio_wave()
+    min_samples = max(1, int(self.audio_sample_rate / max(self.frame_rate, 1.0)))
+    audio_present = wave.size >= min_samples
+    if not audio_present:
+      wave = np.zeros(max(min_samples, 1), dtype=np.float32)
+    patches = mel_tensor_from_wave(
+      wave,
+      self.audio_sample_rate,
+      self.window_len,
+      self.frame_rate,
+      n_mels=self.audio_n_mels,
+      mel_width=self.audio_mel_width,
+    )
+    if patches.shape[0] < self.window_len:
+      pad_n = self.window_len - patches.shape[0]
+      pad = patches[:1].expand(pad_n, *patches.shape[1:]).clone()
+      patches = torch.cat([pad, patches], dim=0)
+    elif patches.shape[0] > self.window_len:
+      patches = patches[-self.window_len :]
+    return patches.unsqueeze(0).to(self.device), audio_present
+
+  def _audio_monitor_rgb(self) -> np.ndarray:
+    wave = self._live_audio_wave()
+    try:
+      return render_audio_monitor_rgb(wave, self.audio_sample_rate)
+    except Exception:
+      return _placeholder_rgb("audio monitor unavailable", 320, 180)
+
+  def _audio_verify_text(self) -> str:
+    if not self.enable_audio:
+      return "ckpt has no audio"
+    if not self.audio_input_enabled:
+      return "input off"
+    if not self.audio_buffer.running:
+      err = self.audio_buffer.last_error or "not started"
+      return f"mic off ({err})"
+    stats = self.audio_buffer.level_stats()
+    if not stats.get("has_data"):
+      return "warming…"
+    ok = "ok" if stats.get("ok") else "dead/quiet"
+    return f"{ok}  rms={float(stats['rms']):.3f}  peak={float(stats['peak']):.3f}"
+
+  @staticmethod
+  def _reliance_from_weights(weights: torch.Tensor | None) -> dict[str, float]:
+    out = {"camera": 0.0, "radar": 0.0, "audio": 0.0}
+    if weights is None:
+      return out
+    w = weights.detach().float().reshape(-1).cpu().numpy()
+    if w.size >= 3:
+      out["radar"] = float(w[0] + w[1])
+      out["camera"] = float(w[2])
+    if w.size >= 4:
+      out["audio"] = float(w[3])
+    return out
 
   @staticmethod
   def _presence_probs(outputs: dict) -> tuple[float, float]:
@@ -242,13 +340,24 @@ class InferenceWorker:
     radar2_tensor: torch.Tensor | None = None,
   ) -> tuple[np.ndarray, str, float, float, float]:
     with torch.no_grad():
-      out = self.model(
-        radar_tensor,
-        camera_tensor,
-        radar2=radar2_tensor,
-        radar_present=torch.tensor([radar_present], dtype=torch.bool, device=self.device),
-        camera_present=torch.tensor([camera_present], dtype=torch.bool, device=self.device),
-      )
+      kwargs: dict[str, Any] = {
+        "radar": radar_tensor,
+        "camera": camera_tensor,
+        "radar2": radar2_tensor,
+        "radar_present": torch.tensor([radar_present], dtype=torch.bool, device=self.device),
+        "camera_present": torch.tensor([camera_present], dtype=torch.bool, device=self.device),
+      }
+      if self.enable_audio:
+        audio_tensor, audio_present = self._build_audio_tensor()
+        if audio_tensor is not None:
+          kwargs["audio"] = audio_tensor
+          kwargs["audio_present"] = torch.tensor(
+            [bool(audio_present and self.audio_enabled)],
+            dtype=torch.bool,
+            device=self.device,
+          )
+      out = self.model(**kwargs)
+      self._cached_reliance = self._reliance_from_weights(out.get("quality_weights"))
       logits = out.get("activity_logits", out.get("logits"))
       probs = F.softmax(logits[0], dim=-1).detach().cpu().numpy()
       coarse_probs = None
@@ -310,17 +419,25 @@ class InferenceWorker:
 
   def run(self):
     camera: CameraStream | None = None
-    try:
-      camera = CameraStream(
-        self.camera_device,
-        self.camera_width,
-        self.camera_height,
-        self.camera_fps,
-      ).start(warmup_s=2.0)
-    except RuntimeError as exc:
+    if self.camera_device is not None and int(self.camera_device) >= 0:
+      try:
+        camera = CameraStream(
+          int(self.camera_device),
+          self.camera_width,
+          self.camera_height,
+          self.camera_fps,
+        ).start(warmup_s=2.0)
+      except RuntimeError as exc:
+        with self.state_lock:
+          self.latest_state["status"] = f"camera open failed: {exc}"
+          self.latest_state["camera_rgb"] = _placeholder_rgb(str(exc), self.camera_width, self.camera_height)
+    elif self.camera_enabled:
       with self.state_lock:
-        self.latest_state["status"] = f"camera open failed: {exc}"
-        self.latest_state["camera_rgb"] = _placeholder_rgb(str(exc), self.camera_width, self.camera_height)
+        self.latest_state["status"] = "no camera selected"
+        self.latest_state["camera_rgb"] = _placeholder_rgb("No camera selected", self.camera_width, self.camera_height)
+
+    if self.enable_audio and self.audio_input_enabled:
+      self.audio_buffer.start(device=self.audio_device_index)
 
     t0 = time.time()
     n_infer = 0
@@ -331,6 +448,7 @@ class InferenceWorker:
       with self.state_lock:
         radar_on = self.radar_enabled
         camera_on = self.camera_enabled
+        audio_on = self.audio_enabled and self.enable_audio
         threshold = self.detect_threshold
 
       fused_radar = None
@@ -383,6 +501,10 @@ class InferenceWorker:
 
       cam_ready = len(self.camera_buffer) >= self.window_len
       rad_ready = len(self.radar1_buffer) >= self.window_len or len(self.radar_buffer) >= self.window_len
+      audio_ready = False
+      if audio_on:
+        wave = self._live_audio_wave()
+        audio_ready = wave.size >= max(1, int(self.audio_sample_rate / max(self.frame_rate, 1.0)))
 
       if camera_on and radar_on:
         can_predict = cam_ready and rad_ready
@@ -390,6 +512,8 @@ class InferenceWorker:
         can_predict = cam_ready
       elif radar_on:
         can_predict = rad_ready
+      elif audio_on:
+        can_predict = audio_ready
       else:
         can_predict = False
 
@@ -490,9 +614,14 @@ class InferenceWorker:
           camera_present = True
           radar_np = np.zeros((self.window_len, 3, 32, 32), dtype=np.float32)
           radar2_np = radar_np
-        else:
+        elif radar_on:
           radar_present = True
           camera_present = False
+        else:
+          radar_present = False
+          camera_present = False
+          radar_np = np.zeros((self.window_len, 3, 32, 32), dtype=np.float32)
+          radar2_np = radar_np
 
         radar_t = torch.from_numpy(np.asarray(radar_np, dtype=np.float32)).unsqueeze(0).to(self.device)
         radar2_t = torch.from_numpy(np.asarray(radar2_np, dtype=np.float32)).unsqueeze(0).to(self.device)
@@ -535,6 +664,11 @@ class InferenceWorker:
       elif self.no_radar:
         radar_status = "disabled (--no-radar)"
 
+      audio_rgb = _placeholder_rgb("Audio idle", 320, 180)
+      if self.enable_audio:
+        audio_rgb = self._audio_monitor_rgb()
+      audio_verify = self._audio_verify_text()
+
       with self.state_lock:
         self.latest_state.update(
           {
@@ -556,6 +690,9 @@ class InferenceWorker:
             "probs": probs,
             "camera_rgb": camera_rgb,
             "radar_rgb": radar_rgb,
+            "audio_rgb": audio_rgb,
+            "audio_verify_text": audio_verify,
+            "reliance": dict(getattr(self, "_cached_reliance", {"camera": 0.0, "radar": 0.0, "audio": 0.0})),
           }
         )
 
@@ -571,6 +708,8 @@ class InferenceWorker:
           num_rx=self.num_rx,
           profile=self.radar_profile,
           frame_rate_hz=self.frame_rate,
+          radar1_uuid=self.radar1_uuid,
+          radar2_uuid=self.radar2_uuid,
           radar1_port=self.radar1_port,
           radar2_port=self.radar2_port,
           mirror_radar2=self.mirror_radar2,
@@ -588,15 +727,38 @@ class InferenceWorker:
     finally:
       if camera is not None:
         camera.stop()
+      if self.audio_buffer.running:
+        self.audio_buffer.stop()
       with self.state_lock:
         self.latest_state["status"] = "stopped"
 
 
-def _worker_from_args(args: argparse.Namespace, *, detect_threshold: float, human_threshold: float) -> InferenceWorker:
-  return InferenceWorker(
+def _parse_radar_uuid_choice(value: str) -> str | None:
+  v = (value or "").strip()
+  if v in ("", "(auto first)", "(auto second)", "(auto)"):
+    return None
+  if v == "(none)":
+    return "__none__"
+  return v
+
+
+def _worker_from_args(
+  args: argparse.Namespace,
+  *,
+  detect_threshold: float,
+  human_threshold: float,
+  camera_device: int | None = None,
+  audio_device: int | None = None,
+  radar1_uuid: str | None = None,
+  radar2_uuid: str | None = None,
+) -> InferenceWorker:
+  cam = args.camera_device if camera_device is None else camera_device
+  if cam is None:
+    cam = -1
+  worker = InferenceWorker(
     checkpoint=args.checkpoint,
     device=args.device,
-    camera_device=args.camera_device,
+    camera_device=int(cam),
     camera_width=args.camera_width,
     camera_height=args.camera_height,
     camera_fps=args.camera_fps,
@@ -605,9 +767,12 @@ def _worker_from_args(args: argparse.Namespace, *, detect_threshold: float, huma
     frame_rate=args.frame_rate,
     radar1_port=args.radar1_port,
     radar2_port=args.radar2_port,
+    radar1_uuid=radar1_uuid,
+    radar2_uuid=radar2_uuid,
     mirror_radar2=args.mirror_radar2,
     dual_radar_fuse=None if args.dual_radar_fuse == "auto" else args.dual_radar_fuse,
     no_radar=args.no_radar,
+    no_audio=bool(getattr(args, "no_audio", False)),
     window_len=args.window,
     detect_threshold=detect_threshold,
     human_threshold=human_threshold,
@@ -622,25 +787,34 @@ def _worker_from_args(args: argparse.Namespace, *, detect_threshold: float, huma
     live_detector_preprocess=bool(args.live_detector_preprocess),
     use_motion_gate=bool(args.use_motion_gate),
   )
+  if getattr(args, "no_audio", False):
+    worker.set_audio_device(None, input_enabled=False)
+  else:
+    worker.set_audio_device(audio_device, input_enabled=True)
+  return worker
 
 
 class JetsonGuiApp:
   def __init__(self, args: argparse.Namespace):
     self.args = args
     self.root = tk.Tk()
-    self.root.title("JetsonCA — Activity Recognition")
-    self.root.geometry("1100x640")
-    self.root.minsize(900, 520)
+    self.root.title("JetsonCA — Testing / Realtime")
+    self.root.geometry("1280x760")
+    self.root.minsize(980, 600)
     self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
     self.worker = _worker_from_args(
       args,
       detect_threshold=args.detect_threshold,
       human_threshold=args.human_threshold,
+      camera_device=args.camera_device,
+      audio_device=args.audio_device,
     )
     self.worker_thread: threading.Thread | None = None
+    self._sensor_scan_thread: threading.Thread | None = None
+    self._probed_once = False
 
-    self.status_var = tk.StringVar(value="idle")
+    self.status_var = tk.StringVar(value="idle — pick devices, then Start")
     self.prediction_var = tk.StringVar(value="-")
     self.hierarchy_var = tk.StringVar(value="")
     self.conf_var = tk.StringVar(value="0.00")
@@ -650,18 +824,35 @@ class JetsonGuiApp:
     self.radar_status_var = tk.StringVar(value="off")
     self.threshold_var = tk.StringVar(value=str(args.detect_threshold))
     self.human_threshold_var = tk.StringVar(value=str(args.human_threshold))
+    self.min_range_var = tk.StringVar(value=str(args.min_range_m))
+    self.max_range_var = tk.StringVar(value=str(args.max_range_m if args.max_range_m is not None else ""))
     self.detect_var = tk.StringVar(value="detect=0.00")
     self.gate_var = tk.StringVar(value="GATE closed")
+    self.audio_verify_var = tk.StringVar(value="off")
+    self.discovered_var = tk.StringVar(value="Click Refresh devices")
+    self.checkpoint_var = tk.StringVar(value=str(args.checkpoint))
+    self.reliance_camera_var = tk.StringVar(value="0%")
+    self.reliance_radar_var = tk.StringVar(value="0%")
+    self.reliance_audio_var = tk.StringVar(value="0%")
+    self.expected_label_var = tk.StringVar(value="(none)")
     self.camera_enabled_var = tk.BooleanVar(value=True)
     self.radar_enabled_var = tk.BooleanVar(value=not args.no_radar)
+    self.audio_enabled_var = tk.BooleanVar(value=bool(self.worker.enable_audio))
+    self.camera_device_var = tk.StringVar(value="(scanning…)")
+    self.audio_device_var = tk.StringVar(value="(default)")
+    self.radar1_uuid_var = tk.StringVar(value="(auto first)")
+    self.radar2_uuid_var = tk.StringVar(value="(auto second)")
+    self._camera_index_to_label: dict[str, int] = {}
+    self._audio_index_to_label: dict[str, int] = {}
 
     self.camera_photo = None
     self.radar_photo = None
+    self.audio_photo = None
     self.prob_bars: list[ttk.Progressbar] = []
     self.prob_labels: list[tk.StringVar] = []
 
     self._build_ui()
-    self.start()
+    self.root.after(50, self._refresh_sensor_lists)
     self.root.after(80, self._refresh_ui)
 
   def _build_ui(self):
@@ -675,6 +866,7 @@ class JetsonGuiApp:
     left.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
     left.rowconfigure(0, weight=3)
     left.rowconfigure(1, weight=2)
+    left.rowconfigure(2, weight=2)
     left.columnconfigure(0, weight=1)
 
     cam_box = ttk.LabelFrame(left, text="Camera")
@@ -685,116 +877,314 @@ class JetsonGuiApp:
     self.camera_label.grid(row=0, column=0, sticky="nsew", padx=4, pady=4)
 
     radar_box = ttk.LabelFrame(left, text="Radar")
-    radar_box.grid(row=1, column=0, sticky="nsew")
+    radar_box.grid(row=1, column=0, sticky="nsew", pady=(0, 6))
     radar_box.rowconfigure(0, weight=1)
     radar_box.columnconfigure(0, weight=1)
     self.radar_label = ttk.Label(radar_box, anchor="center")
     self.radar_label.grid(row=0, column=0, sticky="nsew", padx=4, pady=4)
 
+    audio_box = ttk.LabelFrame(left, text="Audio — mel + waveform")
+    audio_box.grid(row=2, column=0, sticky="nsew")
+    audio_box.rowconfigure(0, weight=1)
+    audio_box.columnconfigure(0, weight=1)
+    self.audio_label = ttk.Label(audio_box, anchor="center")
+    self.audio_label.grid(row=0, column=0, sticky="nsew", padx=4, pady=4)
+    self.audio_box = audio_box
+    if not self.worker.enable_audio:
+      audio_box.grid_remove()
+
     right = ttk.Frame(main)
     right.grid(row=0, column=1, sticky="nsew")
     right.columnconfigure(0, weight=1)
+    right.rowconfigure(1, weight=1)
 
     pred_box = ttk.LabelFrame(right, text="Prediction", padding=8)
     pred_box.grid(row=0, column=0, sticky="ew", pady=(0, 6))
     pred_box.columnconfigure(0, weight=1)
-    ttk.Label(pred_box, textvariable=self.prediction_var, font=("Segoe UI", 18, "bold")).grid(
-      row=0, column=0, sticky="w"
-    )
-    ttk.Label(pred_box, textvariable=self.hierarchy_var, wraplength=320).grid(row=1, column=0, sticky="w")
-    ttk.Label(pred_box, text="Confidence:").grid(row=2, column=0, sticky="w", pady=(6, 0))
-    ttk.Label(pred_box, textvariable=self.conf_var).grid(row=2, column=1, sticky="w", pady=(6, 0))
-    ttk.Label(pred_box, text="Raw (pre-smooth):").grid(row=3, column=0, sticky="w")
-    ttk.Label(pred_box, textvariable=self.raw_var).grid(row=3, column=1, sticky="w")
-    ttk.Label(pred_box, textvariable=self.detect_var).grid(row=4, column=0, sticky="w", pady=(4, 0))
-    ttk.Label(pred_box, textvariable=self.gate_var, font=("Segoe UI", 10, "bold")).grid(
-      row=4, column=1, sticky="w", pady=(4, 0)
+    ttk.Label(pred_box, textvariable=self.prediction_var, font=("Segoe UI", 18, "bold")).grid(row=0, column=0, sticky="w")
+    ttk.Label(pred_box, textvariable=self.hierarchy_var, wraplength=360).grid(row=1, column=0, sticky="w")
+    ttk.Label(pred_box, textvariable=self.detect_var).grid(row=2, column=0, sticky="w", pady=(4, 0))
+    ttk.Label(pred_box, textvariable=self.gate_var, font=("Segoe UI", 10, "bold")).grid(row=2, column=1, sticky="w", pady=(4, 0))
+
+    notebook = ttk.Notebook(right)
+    notebook.grid(row=1, column=0, sticky="nsew")
+    testing = ttk.Frame(notebook, padding=6)
+    realtime = ttk.Frame(notebook, padding=6)
+    notebook.add(testing, text="Testing")
+    notebook.add(realtime, text="Realtime")
+    self._fill_testing_tab(testing)
+    self._fill_realtime_tab(realtime)
+
+  def _fill_testing_tab(self, parent: ttk.Frame):
+    parent.columnconfigure(1, weight=1)
+    devices = ttk.LabelFrame(parent, text="Devices (applied on Start)")
+    devices.grid(row=0, column=0, columnspan=3, sticky="ew", pady=(0, 8))
+    devices.columnconfigure(1, weight=1)
+
+    self.sensor_refresh_btn = ttk.Button(devices, text="Refresh devices", command=self._refresh_sensor_lists)
+    self.sensor_refresh_btn.grid(row=0, column=0, columnspan=2, sticky="w", padx=6, pady=4)
+
+    ttk.Label(devices, text="Camera").grid(row=1, column=0, sticky="w", padx=6, pady=3)
+    self.camera_combo = ttk.Combobox(devices, textvariable=self.camera_device_var, state="readonly", width=36)
+    self.camera_combo.grid(row=1, column=1, sticky="ew", padx=6, pady=3)
+
+    ttk.Label(devices, text="Audio input").grid(row=2, column=0, sticky="w", padx=6, pady=3)
+    self.audio_combo = ttk.Combobox(devices, textvariable=self.audio_device_var, state="readonly", width=36)
+    self.audio_combo.grid(row=2, column=1, sticky="ew", padx=6, pady=3)
+    self.audio_combo.bind("<<ComboboxSelected>>", lambda _e: self._on_audio_selected())
+    if not self.worker.enable_audio:
+      self.audio_combo.state(["disabled"])
+
+    ttk.Label(devices, text="Radar 1 UUID").grid(row=3, column=0, sticky="w", padx=6, pady=3)
+    self.radar1_combo = ttk.Combobox(devices, textvariable=self.radar1_uuid_var, state="readonly", width=36)
+    self.radar1_combo.grid(row=3, column=1, sticky="ew", padx=6, pady=3)
+
+    ttk.Label(devices, text="Radar 2 UUID").grid(row=4, column=0, sticky="w", padx=6, pady=3)
+    self.radar2_combo = ttk.Combobox(devices, textvariable=self.radar2_uuid_var, state="readonly", width=36)
+    self.radar2_combo.grid(row=4, column=1, sticky="ew", padx=6, pady=3)
+
+    ttk.Label(devices, textvariable=self.discovered_var, justify="left", wraplength=420).grid(
+      row=5, column=0, columnspan=2, sticky="w", padx=6, pady=6
     )
 
-    ctrl = ttk.LabelFrame(right, text="Controls", padding=8)
-    ctrl.grid(row=1, column=0, sticky="ew", pady=(0, 6))
-    ctrl.columnconfigure(1, weight=1)
+    eval_box = ttk.LabelFrame(parent, text="Evaluation")
+    eval_box.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(0, 8))
+    eval_box.columnconfigure(1, weight=1)
+    ttk.Label(eval_box, text="Expected label").grid(row=0, column=0, sticky="w", padx=6, pady=3)
+    ttk.Combobox(
+      eval_box,
+      textvariable=self.expected_label_var,
+      values=["(none)", *list(self.worker.labels)],
+      state="readonly",
+      width=28,
+    ).grid(row=0, column=1, sticky="w", padx=6, pady=3)
+    ttk.Label(eval_box, text="Classes").grid(row=1, column=0, sticky="nw", padx=6, pady=3)
+    ttk.Label(eval_box, text=", ".join(self.worker.labels), wraplength=360, justify="left").grid(
+      row=1, column=1, sticky="w", padx=6, pady=3
+    )
+    ttk.Label(eval_box, text="Detect threshold").grid(row=2, column=0, sticky="w", padx=6, pady=3)
+    ttk.Entry(eval_box, textvariable=self.threshold_var, width=8).grid(row=2, column=1, sticky="w", padx=6, pady=3)
+    ttk.Label(eval_box, text="Human threshold").grid(row=3, column=0, sticky="w", padx=6, pady=3)
+    ttk.Entry(eval_box, textvariable=self.human_threshold_var, width=8).grid(row=3, column=1, sticky="w", padx=6, pady=3)
+    ttk.Label(eval_box, text="Min range (m)").grid(row=4, column=0, sticky="w", padx=6, pady=3)
+    ttk.Entry(eval_box, textvariable=self.min_range_var, width=8).grid(row=4, column=1, sticky="w", padx=6, pady=3)
+    ttk.Label(eval_box, text="Max range (m)").grid(row=5, column=0, sticky="w", padx=6, pady=3)
+    ttk.Entry(eval_box, textvariable=self.max_range_var, width=8).grid(row=5, column=1, sticky="w", padx=6, pady=3)
+    ttk.Button(eval_box, text="Apply gates", command=self._apply_thresholds).grid(row=6, column=0, sticky="w", padx=6, pady=6)
 
-    ttk.Checkbutton(ctrl, text="Camera", variable=self.camera_enabled_var, command=self._apply_modalities).grid(
-      row=0, column=0, sticky="w"
+  def _fill_realtime_tab(self, parent: ttk.Frame):
+    parent.columnconfigure(1, weight=1)
+    box = ttk.LabelFrame(parent, text="Run")
+    box.grid(row=0, column=0, columnspan=3, sticky="ew", pady=(0, 8))
+    box.columnconfigure(1, weight=1)
+    ttk.Label(box, text="Checkpoint").grid(row=0, column=0, sticky="w", padx=6, pady=3)
+    ttk.Label(box, textvariable=self.checkpoint_var, wraplength=340).grid(row=0, column=1, sticky="w", padx=6, pady=3)
+    run_row = ttk.Frame(box)
+    run_row.grid(row=1, column=0, columnspan=2, sticky="ew", padx=6, pady=6)
+    ttk.Button(run_row, text="Start", command=self.start).pack(side="left", padx=(0, 6))
+    ttk.Button(run_row, text="Stop", command=self.stop).pack(side="left")
+
+    mod = ttk.LabelFrame(box, text="Modality (while running)")
+    mod.grid(row=2, column=0, columnspan=2, sticky="ew", padx=4, pady=4)
+    ttk.Checkbutton(mod, text="Camera", variable=self.camera_enabled_var, command=self._apply_modalities).grid(
+      row=0, column=0, sticky="w", padx=4, pady=2
     )
-    radar_cb = ttk.Checkbutton(
-      ctrl,
-      text="Radar",
-      variable=self.radar_enabled_var,
-      command=self._apply_modalities,
-    )
-    radar_cb.grid(row=0, column=1, sticky="w")
+    radar_cb = ttk.Checkbutton(mod, text="Radar", variable=self.radar_enabled_var, command=self._apply_modalities)
+    radar_cb.grid(row=0, column=1, sticky="w", padx=4, pady=2)
     if self.args.no_radar:
       radar_cb.state(["disabled"])
-
-    ttk.Label(ctrl, text="Detect threshold").grid(row=1, column=0, sticky="w", pady=(6, 0))
-    thr = ttk.Entry(ctrl, textvariable=self.threshold_var, width=8)
-    thr.grid(row=1, column=1, sticky="w", pady=(6, 0))
-    ttk.Button(ctrl, text="Apply", command=self._apply_thresholds).grid(row=1, column=2, padx=(6, 0), pady=(6, 0))
-
-    ttk.Label(ctrl, text="Human threshold").grid(row=2, column=0, sticky="w", pady=(4, 0))
-    ttk.Entry(ctrl, textvariable=self.human_threshold_var, width=8).grid(row=2, column=1, sticky="w", pady=(4, 0))
-
-    btn_row = ttk.Frame(ctrl)
-    btn_row.grid(row=3, column=0, columnspan=3, sticky="ew", pady=(8, 0))
-    ttk.Button(btn_row, text="Start", command=self.start).pack(side="left", padx=(0, 6))
-    ttk.Button(btn_row, text="Stop", command=self.stop).pack(side="left")
-
-    status_box = ttk.LabelFrame(right, text="Status", padding=8)
-    status_box.grid(row=2, column=0, sticky="ew", pady=(0, 6))
-    for row, (label, var) in enumerate(
-      (
-        ("Run", self.status_var),
-        ("Latency", self.latency_var),
-        ("Range", self.range_var),
-        ("Radar", self.radar_status_var),
+    if self.worker.enable_audio:
+      ttk.Checkbutton(mod, text="Audio", variable=self.audio_enabled_var, command=self._apply_modalities).grid(
+        row=0, column=2, sticky="w", padx=4, pady=2
       )
-    ):
-      ttk.Label(status_box, text=f"{label}:").grid(row=row, column=0, sticky="w")
-      ttk.Label(status_box, textvariable=var, wraplength=280).grid(row=row, column=1, sticky="w")
 
-    prob_box = ttk.LabelFrame(right, text="Class probabilities", padding=8)
-    prob_box.grid(row=3, column=0, sticky="nsew")
-    prob_box.columnconfigure(1, weight=1)
-    right.rowconfigure(3, weight=1)
+    ttk.Label(box, text="Audio verify").grid(row=3, column=0, sticky="w", padx=6, pady=3)
+    ttk.Label(box, textvariable=self.audio_verify_var, wraplength=340).grid(row=3, column=1, sticky="w", padx=6, pady=3)
+    ttk.Label(box, text="Run status").grid(row=4, column=0, sticky="w", padx=6, pady=3)
+    ttk.Label(box, textvariable=self.status_var, wraplength=340).grid(row=4, column=1, sticky="w", padx=6, pady=3)
+    ttk.Label(box, text="Latency").grid(row=5, column=0, sticky="w", padx=6, pady=3)
+    ttk.Label(box, textvariable=self.latency_var).grid(row=5, column=1, sticky="w", padx=6, pady=3)
+    ttk.Label(box, text="Range").grid(row=6, column=0, sticky="w", padx=6, pady=3)
+    ttk.Label(box, textvariable=self.range_var).grid(row=6, column=1, sticky="w", padx=6, pady=3)
+    ttk.Label(box, text="Radar").grid(row=7, column=0, sticky="w", padx=6, pady=3)
+    ttk.Label(box, textvariable=self.radar_status_var, wraplength=340).grid(row=7, column=1, sticky="w", padx=6, pady=3)
+    ttk.Label(box, text="Raw / conf").grid(row=8, column=0, sticky="w", padx=6, pady=3)
+    ttk.Label(box, textvariable=self.raw_var).grid(row=8, column=1, sticky="w", padx=6, pady=3)
+    ttk.Label(box, textvariable=self.conf_var).grid(row=8, column=2, sticky="w", padx=6, pady=3)
 
+    probs_box = ttk.LabelFrame(parent, text="Fused class probs")
+    probs_box.grid(row=1, column=0, columnspan=3, sticky="nsew")
+    probs_box.columnconfigure(1, weight=1)
+    parent.rowconfigure(1, weight=1)
     for idx, label in enumerate(self.worker.labels):
       var = tk.StringVar(value=f"{label}: 0.00")
       self.prob_labels.append(var)
-      ttk.Label(prob_box, textvariable=var).grid(row=idx, column=0, sticky="w", pady=1)
-      bar = ttk.Progressbar(prob_box, maximum=100.0, length=160)
+      ttk.Label(probs_box, textvariable=var).grid(row=idx, column=0, sticky="w", pady=1)
+      bar = ttk.Progressbar(probs_box, maximum=100.0, length=180)
       bar.grid(row=idx, column=1, sticky="ew", padx=(8, 0), pady=1)
       self.prob_bars.append(bar)
+    rel = len(self.worker.labels)
+    ttk.Label(probs_box, text="Camera reliance").grid(row=rel, column=0, sticky="w", padx=2, pady=2)
+    ttk.Label(probs_box, textvariable=self.reliance_camera_var).grid(row=rel, column=1, sticky="w")
+    self.camera_reliance_bar = ttk.Progressbar(probs_box, maximum=100, length=180)
+    self.camera_reliance_bar.grid(row=rel + 1, column=0, columnspan=2, sticky="ew", padx=2, pady=2)
+    ttk.Label(probs_box, text="Radar reliance").grid(row=rel + 2, column=0, sticky="w", padx=2, pady=2)
+    ttk.Label(probs_box, textvariable=self.reliance_radar_var).grid(row=rel + 2, column=1, sticky="w")
+    self.radar_reliance_bar = ttk.Progressbar(probs_box, maximum=100, length=180)
+    self.radar_reliance_bar.grid(row=rel + 3, column=0, columnspan=2, sticky="ew", padx=2, pady=2)
+    if self.worker.enable_audio:
+      ttk.Label(probs_box, text="Audio reliance").grid(row=rel + 4, column=0, sticky="w", padx=2, pady=2)
+      ttk.Label(probs_box, textvariable=self.reliance_audio_var).grid(row=rel + 4, column=1, sticky="w")
+      self.audio_reliance_bar = ttk.Progressbar(probs_box, maximum=100, length=180)
+      self.audio_reliance_bar.grid(row=rel + 5, column=0, columnspan=2, sticky="ew", padx=2, pady=2)
+    else:
+      self.audio_reliance_bar = None
+
+  def _camera_index_from_var(self) -> int:
+    label = self.camera_device_var.get().strip()
+    if label in ("(none)", "", "(scanning…)"):
+      return -1
+    if label.isdigit():
+      return int(label)
+    return self._camera_index_to_label.get(label, -1)
+
+  def _audio_index_from_var(self) -> int | None:
+    label = self.audio_device_var.get().strip()
+    if label in ("(none)", "", "(scanning…)"):
+      return None
+    if label == "(default)":
+      return None
+    if label.isdigit():
+      return int(label)
+    return self._audio_index_to_label.get(label)
+
+  def _on_audio_selected(self):
+    if self.audio_device_var.get().strip() == "(none)":
+      self.audio_enabled_var.set(False)
+      self.worker.set_audio_device(None, input_enabled=False)
+    else:
+      self.worker.set_audio_device(self._audio_index_from_var(), input_enabled=True)
+
+  def _refresh_sensor_lists(self):
+    if self._sensor_scan_thread is not None and self._sensor_scan_thread.is_alive():
+      return
+    if hasattr(self, "sensor_refresh_btn"):
+      self.sensor_refresh_btn.configure(state="disabled")
+    if hasattr(self, "camera_combo"):
+      self.camera_combo["values"] = ["(scanning…)"]
+
+    def work():
+      cameras = probe_camera_devices()
+      audio_devices = list_audio_input_devices()
+      radar_uuids = list_radar_uuids()
+      self.root.after(0, lambda: self._apply_sensor_probe_results(cameras, audio_devices, radar_uuids))
+
+    self._sensor_scan_thread = threading.Thread(target=work, daemon=True)
+    self._sensor_scan_thread.start()
+
+  def _apply_sensor_probe_results(self, cameras, audio_devices, radar_uuids):
+    cam_labels = ["(none)"]
+    self._camera_index_to_label = {}
+    for cam in cameras:
+      label = str(cam["label"])
+      cam_labels.append(label)
+      self._camera_index_to_label[label] = int(cam["index"])
+    if hasattr(self, "camera_combo"):
+      self.camera_combo["values"] = cam_labels
+
+    prev_cam = self.camera_device_var.get().strip()
+    keep_cam = prev_cam in self._camera_index_to_label
+    if keep_cam:
+      pass
+    elif self.args.camera_device is not None:
+      match = next((c for c in cameras if int(c["index"]) == int(self.args.camera_device)), None)
+      self.camera_device_var.set(str(match["label"]) if match else ("(none)" if not cameras else cameras[0]["label"]))
+    else:
+      chosen = prefer_microsoft(cameras)
+      self.camera_device_var.set(str(chosen["label"]) if chosen else "(none)")
+
+    audio_labels = ["(default)", "(none)"]
+    self._audio_index_to_label = {}
+    for dev in audio_devices:
+      label = str(dev["label"])
+      audio_labels.append(label)
+      self._audio_index_to_label[label] = int(dev["index"])
+    if hasattr(self, "audio_combo"):
+      self.audio_combo["values"] = audio_labels
+
+    prev_audio = self.audio_device_var.get().strip()
+    if prev_audio not in audio_labels or prev_audio in ("(scanning…)", ""):
+      if self.args.audio_device is not None:
+        match = next((d for d in audio_devices if int(d["index"]) == int(self.args.audio_device)), None)
+        self.audio_device_var.set(str(match["label"]) if match else "(default)")
+      else:
+        mic = prefer_microsoft(audio_devices)
+        self.audio_device_var.set(str(mic["label"]) if mic else "(default)")
+
+    radar_choices = ["(auto first)", "(auto second)", "(none)", *list(radar_uuids)]
+    if hasattr(self, "radar1_combo"):
+      self.radar1_combo["values"] = radar_choices
+      self.radar2_combo["values"] = radar_choices
+
+    cam_lines = [f"• {c['label']}" for c in cameras] or ["• (no cameras)"]
+    audio_lines = [f"• {d['label']}" for d in audio_devices] or ["• (no mics / install sounddevice)"]
+    radar_lines = [f"• {u}" for u in radar_uuids] or ["• (no BGT UUIDs)"]
+    self.discovered_var.set(
+      "Cameras:\n" + "\n".join(cam_lines) + "\n\nAudio:\n" + "\n".join(audio_lines) + "\n\nRadar:\n" + "\n".join(radar_lines)
+    )
+    if hasattr(self, "sensor_refresh_btn"):
+      self.sensor_refresh_btn.configure(state="normal")
+    self._probed_once = True
+    self._on_audio_selected()
 
   def _apply_modalities(self):
     self.worker.set_modalities(
       camera=self.camera_enabled_var.get(),
       radar=self.radar_enabled_var.get(),
+      audio=self.audio_enabled_var.get(),
     )
 
   def _apply_thresholds(self):
     try:
       self.worker.set_threshold(float(self.threshold_var.get()))
       self.worker.set_human_threshold(float(self.human_threshold_var.get()))
+      self.worker.min_range_m = float(self.min_range_var.get())
+      if self.max_range_var.get().strip():
+        self.worker.max_range_m = float(self.max_range_var.get())
     except ValueError:
-      self.status_var.set("invalid threshold")
+      self.status_var.set("invalid threshold / range")
 
   def start(self):
     if self.worker_thread is not None and self.worker_thread.is_alive():
       return
     try:
-      self.worker = _worker_from_args(
-        self.args,
-        detect_threshold=float(self.threshold_var.get()),
-        human_threshold=float(self.human_threshold_var.get()),
-      )
+      detect_thr = float(self.threshold_var.get())
+      human_thr = float(self.human_threshold_var.get())
     except ValueError:
       self.status_var.set("invalid threshold")
       return
+    self.worker = _worker_from_args(
+      self.args,
+      detect_threshold=detect_thr,
+      human_threshold=human_thr,
+      camera_device=self._camera_index_from_var(),
+      audio_device=self._audio_index_from_var(),
+      radar1_uuid=_parse_radar_uuid_choice(self.radar1_uuid_var.get()),
+      radar2_uuid=_parse_radar_uuid_choice(self.radar2_uuid_var.get()),
+    )
+    try:
+      if self.min_range_var.get().strip():
+        self.worker.min_range_m = float(self.min_range_var.get())
+      if self.max_range_var.get().strip():
+        self.worker.max_range_m = float(self.max_range_var.get())
+    except ValueError:
+      pass
+    audio_on = self.audio_enabled_var.get() and self.audio_device_var.get().strip() != "(none)"
+    self.worker.set_audio_device(self._audio_index_from_var(), input_enabled=audio_on)
     self.worker.set_modalities(
       camera=self.camera_enabled_var.get(),
       radar=self.radar_enabled_var.get(),
+      audio=audio_on,
     )
     self.worker_thread = threading.Thread(target=self.worker.run, daemon=True)
     self.worker_thread.start()
@@ -813,21 +1203,25 @@ class JetsonGuiApp:
   def _refresh_ui(self):
     state = self.worker.get_state()
     pred = str(state["prediction"])
-    conf = float(state["confidence"])
+    expected = self.expected_label_var.get().strip()
+    if expected not in ("", "(none)") and pred not in ("-", "none", "uncertain", "background"):
+      mark = " ✓" if pred == expected else " ✗"
+    else:
+      mark = ""
     self.status_var.set(str(state["status"]))
-    self.prediction_var.set(pred)
+    self.prediction_var.set(pred + mark)
     self.hierarchy_var.set(str(state.get("hierarchy_text", "")))
-    self.conf_var.set(f"{conf:.2f}")
+    self.conf_var.set(f"{float(state['confidence']):.2f}")
     self.raw_var.set(str(state.get("raw_prediction", "-")))
     detect_p = float(state.get("detect_prob", 0.0))
-    gate_open = bool(state.get("gate_open", False))
     self.detect_var.set(f"detect={detect_p:.2f}")
-    self.gate_var.set("GATE OPEN" if gate_open else "GATE closed")
+    self.gate_var.set("GATE OPEN" if bool(state.get("gate_open", False)) else "GATE closed")
     self.latency_var.set(f"{float(state['latency_ms']):.1f} ms  (~{float(state['fps']):.1f} infer/s)")
     target_range = float(state.get("target_range_m", 0.0))
     in_range = bool(state.get("in_range", False))
     self.range_var.set(f"{target_range:.2f} m ({'in gate' if in_range else 'out of gate'})")
     self.radar_status_var.set(str(state.get("radar_status", "-")))
+    self.audio_verify_var.set(str(state.get("audio_verify_text", "off")))
 
     probs = np.asarray(state["probs"], dtype=np.float32)
     for idx, (bar, label_var) in enumerate(zip(self.prob_bars, self.prob_labels)):
@@ -835,10 +1229,25 @@ class JetsonGuiApp:
       bar["value"] = value * 100.0
       label_var.set(f"{self.worker.labels[idx]}: {value:.2f}")
 
+    rel = state.get("reliance") or {}
+    cam_r = float(rel.get("camera", 0.0))
+    rad_r = float(rel.get("radar", 0.0))
+    aud_r = float(rel.get("audio", 0.0))
+    self.reliance_camera_var.set(f"{cam_r * 100:.0f}%")
+    self.reliance_radar_var.set(f"{rad_r * 100:.0f}%")
+    self.reliance_audio_var.set(f"{aud_r * 100:.0f}%")
+    self.camera_reliance_bar["value"] = cam_r * 100.0
+    self.radar_reliance_bar["value"] = rad_r * 100.0
+    if self.audio_reliance_bar is not None:
+      self.audio_reliance_bar["value"] = aud_r * 100.0
+
     cam_size = (max(320, self.camera_label.winfo_width()), max(200, self.camera_label.winfo_height()))
-    rad_size = (max(240, self.radar_label.winfo_width()), max(160, self.radar_label.winfo_height()))
+    rad_size = (max(240, self.radar_label.winfo_width()), max(140, self.radar_label.winfo_height()))
     self._set_image(self.camera_label, state["camera_rgb"], "camera_photo", cam_size, letterbox=True)
     self._set_image(self.radar_label, state["radar_rgb"], "radar_photo", rad_size, letterbox=False)
+    if self.worker.enable_audio:
+      aud_size = (max(240, self.audio_label.winfo_width()), max(120, self.audio_label.winfo_height()))
+      self._set_image(self.audio_label, state["audio_rgb"], "audio_photo", aud_size, letterbox=False)
 
     self.root.after(100, self._refresh_ui)
 
@@ -851,10 +1260,22 @@ class JetsonGuiApp:
 
 
 def parse_args():
-  p = argparse.ArgumentParser(description="Lightweight Jetson cam+radar GUI")
+  p = argparse.ArgumentParser(description="JetsonCA Testing + Realtime GUI (Crossattention subset)")
   p.add_argument("--checkpoint", type=Path, default=Path("artifacts/best_multimodal_crossattention.pt"))
   p.add_argument("--device", type=str, default=default_device())
-  p.add_argument("--camera-device", type=int, default=0)
+  p.add_argument(
+    "--camera-device",
+    type=int,
+    default=None,
+    help="OpenCV index. Default: Microsoft cam if named, else first live camera (not hardcoded 0)",
+  )
+  p.add_argument(
+    "--audio-device",
+    type=int,
+    default=None,
+    help="sounddevice index. Default: Microsoft mic if named, else system default",
+  )
+  p.add_argument("--no-audio", action="store_true", help="Do not open a microphone even if the checkpoint has audio")
   p.add_argument("--camera-width", type=int, default=640)
   p.add_argument("--camera-height", type=int, default=480)
   p.add_argument("--camera-fps", type=float, default=15.0)

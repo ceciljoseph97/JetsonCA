@@ -2,7 +2,7 @@
 
 Jetson Nano–oriented slice of `Crossattention` for **cam1 + radar2** edge inference and KPI benchmarking.
 
-Training / Tk GUI / large datasets stay in `../Crossattention`. This package is what you sync onto the Nano.
+Training / full desktop GUI / large datasets stay in `../Crossattention`. This package is the edge slice you sync onto the Nano (includes a simplified Testing + Realtime GUI).
 
 ## Layout
 
@@ -12,7 +12,9 @@ Training / Tk GUI / large datasets stay in `../Crossattention`. This package is 
 | `detector_pipeline.py` | Optional CFAR soft-mask + cam ROI (honors `detector_preprocess` in ckpt) |
 | `benchmark.py` | AI-DISCO KPI bench (synthetic or `--live`) |
 | `infer_headless.py` | Live inference, no GUI |
-| `gui_app.py` | Lightweight Tk GUI (cam + radar; learned DETECT GATE) |
+| `gui_app.py` | Testing + Realtime Tk GUI (cam + radar + optional live mic) |
+| `live_audio.py` / `audio_features.py` | Mic ring buffer + numpy log-mel (audio ckpts) |
+| `device_select.py` | Prefer Microsoft cam/mic by name; no hardcoded index |
 | `export_onnx.py` | ONNX export → TensorRT (`radar`+`radar2`+detect/human outs) |
 | `jetson_env.py` | Tegra detect + thread/memory tweaks |
 | `realtime_multimodal.py` | Camera stream + checkpoint load |
@@ -24,13 +26,15 @@ Training / Tk GUI / large datasets stay in `../Crossattention`. This package is 
 
 ## Architecture (synced with Crossattention)
 
-Edge runtime now matches the lab model contract:
+Edge runtime matches the lab model contract:
 
 - Dual radar encoders + reliability softmax (`radar2=` forward arg)
 - Heads: activity · coarse · sub · human · **DETECT**
 - GATE = `softmax(detect_logits)[target] ≥ thr` (falls back to human if no detect head in ckpt)
 - `dual_radar_fuse=auto` reads ckpt (`none` preferred for reliability mix; `mean`/`max` early-fuse still supported)
 - Optional `detector_preprocess` CFAR soft-mask when present in ckpt config
+- **Audio:** trained in Crossattention (`--audio`); Jetson GUI wires live mic when the checkpoint has `enable_audio=true` (`sounddevice`). R+C-only ckpts still run; mic combo is disabled.
+- Camera pick is **not** hardcoded to index 0: probe live devices, prefer a **Microsoft** name if present, else first live camera. Override in the Testing tab or `--camera-device N`.
 
 ```bash
 # current Crossattention walk+DETECT weights
@@ -102,7 +106,7 @@ python3 benchmark.py --live --device cuda --n-cameras 1 --n-radars 2 \
 
 ## GUI (VNC / local display)
 
-Requires `DISPLAY` (e.g. TightVNC into the Orin desktop). Lightweight Tk app — camera + radar panels, prediction, no alignment UI.
+Requires `DISPLAY` (e.g. TightVNC into the Orin desktop). Simplified Crossattention **Testing** + **Realtime** tabs — camera / radar / optional audio panels, device probe, Start/Stop.
 
 ```bash
 # TightVNC session — confirm display (often :1)
@@ -111,11 +115,17 @@ echo $DISPLAY   # should be :1 or :0
 export LD_LIBRARY_PATH=$CONDA_PREFIX/lib:${LD_LIBRARY_PATH:-}
 cd ~/AIDisco/JetsonCA
 git pull
+pip3 install sounddevice   # live mic; skip if R+C-only ckpt
 
-python3 gui_app.py --device cuda --camera-device 0
+python3 gui_app.py --device cuda
+# Testing tab: Refresh devices → Microsoft cam/mic auto-selected if named
+# Realtime tab: Start
 
 # camera-only (no radar SDK)
 python3 gui_app.py --device cuda --no-radar
+
+# pin indices only if you must (otherwise leave unset)
+python3 gui_app.py --device cuda --camera-device 1 --audio-device 2
 
 # explicit radar ports (when UUID discovery fails)
 python3 gui_app.py --device cuda \

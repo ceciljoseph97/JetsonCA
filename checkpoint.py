@@ -43,6 +43,9 @@ def load_checkpoint(path: Path | str, device: str):
     enable_human_head=bool(config.get("enable_human_head", False)),
     enable_detect_head=bool(config.get("enable_detect_head", False)),
     enable_reliability_gates=bool(config.get("enable_reliability_gates", False)),
+    enable_audio=bool(config.get("enable_audio", False)),
+    audio_n_mels=_cfg_int(config, "audio_n_mels", 32),
+    audio_mel_width=_cfg_int(config, "audio_mel_width", 32),
   ).to(device)
 
   state = dict(checkpoint["model_state"])

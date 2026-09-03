@@ -15,6 +15,9 @@ LABEL_ALIASES: dict[str, str] = {
 }
 
 LABEL_HIERARCHY: dict[str, tuple[str, str, str]] = {
+  "clapping": ("human", "clapping", "still"),
+  "jumping": ("human", "jumping", "still"),
+  "walking": ("human", "walking", "still"),
   "walking_towards": ("human", "walking", "towards"),
   "walking_away": ("human", "walking", "away"),
   "crossing": ("human", "walking", "crossing"),

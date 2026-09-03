@@ -260,7 +260,12 @@ def probe_camera_devices(max_index: int = 8, stop_after_misses: int = 2) -> list
       label = f"Camera {index} ({w}x{h})"
       found.append({"index": index, "label": label, "width": w, "height": h})
       misses = 0
-  return found
+  try:
+    from device_select import attach_camera_names
+
+    return attach_camera_names(found)
+  except Exception:
+    return found
 
 
 def make_radar_montage(radar_tensor: np.ndarray) -> np.ndarray:
