@@ -795,6 +795,7 @@ def profile_mode(
   device: torch.device,
   warmup: int,
   runs: int,
+  count_flops: bool = True,
 ) -> dict[str, Any]:
   radar, radar2, camera = make_inputs(batch=batch, window=window, image_size=image_size, device=device)
   radar_on = mode in ("both", "radar_only")
@@ -802,17 +803,31 @@ def profile_mode(
   radar_present = torch.full((batch,), radar_on, dtype=torch.bool, device=device)
   camera_present = torch.full((batch,), camera_on, dtype=torch.bool, device=device)
 
-  with FlopCounter(model) as counter:
-    with torch.no_grad():
-      model(
-        radar,
-        camera,
-        radar2=radar2,
-        radar_present=radar_present,
-        camera_present=camera_present,
-        **audio_off_kwargs(model, device),
-      )
-  compute = counter.summary()
+  if count_flops:
+    with FlopCounter(model) as counter:
+      with torch.no_grad():
+        model(
+          radar,
+          camera,
+          radar2=radar2,
+          radar_present=radar_present,
+          camera_present=camera_present,
+          **audio_off_kwargs(model, device),
+        )
+    compute = counter.summary()
+  else:
+    compute = {
+      "total_macs": 0,
+      "total_mops": 0.0,
+      "total_flops": 0,
+      "total_gflops": 0.0,
+      "conv2d_layers": 0,
+      "conv2d_macs": 0,
+      "conv2d_mops": 0.0,
+      "conv2d_flops": 0,
+      "operation_specs": {},
+      "macs_by_op": {},
+    }
 
   latency = measure_latency(
     model,
@@ -1111,7 +1126,17 @@ def run_benchmark(args) -> dict[str, Any]:
     n_radars=args.n_radars,
   )
   platform_info = collect_platform_info(device)
-  monitor = SystemMonitor(enabled=args.system_monitor, interval_ms=args.system_monitor_interval_ms)
+  do_memory = bool(getattr(args, "profile_memory", True))
+  do_resource = bool(getattr(args, "profile_resource", True))
+  do_compute = bool(getattr(args, "profile_compute", True))
+  no_kpi = bool(getattr(args, "no_kpi", False))
+  need_load = do_compute or do_resource or bool(args.live)
+  warmup = int(args.warmup if need_load else 1)
+  runs = int(args.runs if need_load else 1)
+  monitor = SystemMonitor(
+    enabled=bool(args.system_monitor) and do_resource,
+    interval_ms=args.system_monitor_interval_ms,
+  )
   monitor.start()
 
   try:
@@ -1129,8 +1154,8 @@ def run_benchmark(args) -> dict[str, Any]:
           window=args.window,
           image_size=int(config["image_size"]),
           device=device,
-          warmup=args.warmup,
-          runs=args.runs,
+          warmup=warmup,
+          runs=runs,
           num_rx=args.num_rx,
           radar_profile=args.radar_profile,
           frame_rate_hz=args.frame_rate,
@@ -1157,8 +1182,9 @@ def run_benchmark(args) -> dict[str, Any]:
           window=args.window,
           image_size=int(config["image_size"]),
           device=device,
-          warmup=args.warmup,
-          runs=args.runs,
+          warmup=warmup,
+          runs=runs,
+          count_flops=do_compute,
         )
         for mode in modes
       ]
@@ -1170,12 +1196,14 @@ def run_benchmark(args) -> dict[str, Any]:
     (p for p in profiles if p["mode"] in ("both", "live_both", "live_camera_only", "camera_only")),
     profiles[0],
   )
-  kpi = build_kpi_report(
-    profile=primary,
-    params=params,
-    weight_mem=weight_mem,
-    buffer_mem=buffer_mem,
-  )
+  kpi = None
+  if not no_kpi and do_compute:
+    kpi = build_kpi_report(
+      profile=primary,
+      params=params,
+      weight_mem=weight_mem,
+      buffer_mem=buffer_mem,
+    )
   primary_specs = primary.get("compute", {}).get("operation_specs", {})
 
   deploy_profile = "cam1_radar2"
@@ -1206,6 +1234,12 @@ def run_benchmark(args) -> dict[str, Any]:
     "key_meanings": KEY_MEANINGS,
     "operation_specs": primary_specs,
     "kpi": kpi,
+    "profiling": {
+      "memory": do_memory,
+      "resource": do_resource,
+      "compute": do_compute,
+      "kpi": bool(kpi),
+    },
     "system_monitor": monitor.summary(),
     "notes": [
       "FLOPs = 2 * MACs (mul-add counted as 2).",
@@ -1228,6 +1262,91 @@ def run_benchmark(args) -> dict[str, Any]:
     args.out.write_text(json.dumps(report, indent=2), encoding="utf-8")
 
   return report
+
+
+def _fmt_mm(stat: dict | None, *, unit: str = "") -> str:
+  if not stat:
+    return "n/a"
+  tail = f" {unit}" if unit else ""
+  return f"mean={stat['mean']:.2f}{tail}  peak={stat['max']:.2f}{tail}"
+
+
+def format_profile_report(report: dict[str, Any]) -> str:
+  """Human summary for GUI / logs. No KPI pass/fail."""
+  flags = report.get("profiling") or {"memory": True, "resource": True, "compute": True}
+  plat = report.get("platform") or {}
+  dep = report.get("deployment") or {}
+  lines = [
+    f"checkpoint  {report.get('checkpoint')}",
+    f"device      {report.get('device')}  gpu={plat.get('gpu_name') or 'cpu'}",
+    f"platform    {plat.get('hostname')}  {plat.get('os')}",
+    f"source      {report.get('benchmark_source')}  deploy={dep.get('profile')}",
+    f"params      {report['parameters']['total']:,}  ({report.get('parameters_millions')} M)",
+  ]
+  if flags.get("memory", True):
+    wm = report.get("weight_memory") or {}
+    bm = report.get("buffer_memory_estimate") or {}
+    lines.append("— memory —")
+    lines.append(f"  weights    {wm.get('mb', 0):.3f} MB  ({wm.get('kb', 0):.1f} kB)")
+    lines.append(f"  input buf  {bm.get('mb', 0):.3f} MB  (window estimate)")
+    mon = report.get("system_monitor") or {}
+    rss = mon.get("process_rss_mb")
+    if rss:
+      lines.append(f"  process RSS  {_fmt_mm(rss, unit='MB')}")
+    cuda_mon = mon.get("cuda_allocated_mb")
+    if cuda_mon:
+      lines.append(f"  cuda alloc   {_fmt_mm(cuda_mon, unit='MB')}")
+    for profile in report.get("profiles") or []:
+      cuda = profile.get("cuda_memory") or (profile.get("latency") or {}).get("cuda_memory")
+      if cuda:
+        lines.append(
+          f"  cuda peak [{profile['mode']}]  "
+          f"alloc={cuda.get('peak_allocated_mb', 0):.1f} MB  "
+          f"reserved={cuda.get('peak_reserved_mb', 0):.1f} MB"
+        )
+  if flags.get("resource", True):
+    mon = report.get("system_monitor") or {}
+    lines.append("— resource —")
+    if not mon.get("enabled"):
+      lines.append("  (monitor off)")
+    else:
+      cpu = mon.get("system_cpu_avg_percent")
+      proc = mon.get("process_cpu_percent")
+      ram = mon.get("system_ram_used_mb")
+      gr3d = mon.get("tegrastats_gr3d_util_percent")
+      emc = mon.get("tegrastats_emc_util_percent")
+      if cpu:
+        lines.append(f"  CPU         {_fmt_mm(cpu, unit='%')}")
+      if proc:
+        lines.append(f"  proc CPU    {_fmt_mm(proc, unit='%')}")
+      if ram:
+        lines.append(f"  system RAM  {_fmt_mm(ram, unit='MB')}")
+      if gr3d:
+        lines.append(f"  GR3D        {_fmt_mm(gr3d, unit='%')}")
+      if emc:
+        lines.append(f"  EMC         {_fmt_mm(emc, unit='%')}")
+      notes = mon.get("notes") or []
+      for note in notes:
+        lines.append(f"  note        {note}")
+  if flags.get("compute", True):
+    lines.append("— compute —")
+    for profile in report.get("profiles") or []:
+      c = profile.get("compute") or {}
+      lat = profile.get("latency") or {}
+      perf = profile.get("performance") or {}
+      lines.append(f"  [{profile.get('mode')}]")
+      lines.append(
+        f"    latency  mean={lat.get('latency_ms_mean', 0):.2f} ms  "
+        f"p95={lat.get('latency_ms_p95', 0):.2f} ms  "
+        f"fps={lat.get('throughput_fps', 0):.2f}"
+      )
+      if c.get("total_macs"):
+        lines.append(
+          f"    {c.get('total_gflops', 0):.4f} GFLOPs/inf  "
+          f"{c.get('total_mops', 0):.2f} MMACs/inf  "
+          f"achieved={perf.get('achieved_gflops_per_s', 0):.2f} GFLOP/s"
+        )
+  return "\n".join(lines)
 
 
 def _print_summary(report: dict[str, Any]):
@@ -1460,6 +1579,14 @@ def parse_args():
   parser.add_argument("--no-system-monitor", action="store_false", dest="system_monitor", help="Disable CPU/RAM/GPU resource sampling")
   parser.set_defaults(system_monitor=True)
   parser.add_argument("--system-monitor-interval-ms", type=int, default=1000, help="Sampling interval for system monitor")
+  parser.add_argument("--no-kpi", action="store_true", help="Skip AI-DISCO KPI pass/fail (GUI default)")
+  parser.add_argument("--profile-memory", action="store_true", dest="profile_memory")
+  parser.add_argument("--no-profile-memory", action="store_false", dest="profile_memory")
+  parser.add_argument("--profile-resource", action="store_true", dest="profile_resource")
+  parser.add_argument("--no-profile-resource", action="store_false", dest="profile_resource")
+  parser.add_argument("--profile-compute", action="store_true", dest="profile_compute")
+  parser.add_argument("--no-profile-compute", action="store_false", dest="profile_compute")
+  parser.set_defaults(profile_memory=True, profile_resource=True, profile_compute=True)
   default_out = (
     Path("artifacts/benchmark_cam1_radar2_kpi_jetson.json")
     if is_jetson()

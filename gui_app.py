@@ -27,6 +27,7 @@ from tkinter import ttk
 from audio_features import mel_tensor_from_wave, render_audio_monitor_rgb
 from checkpoint import default_checkpoint, load_checkpoint, preprocess_camera_frame
 from device_select import match_audio_to_camera, prefer_microsoft
+from gui_benchmark import mount_profile_tab
 from jetson_env import apply_jetson_runtime_tweaks, default_device
 from label_hierarchy import apply_logit_bias, combine_hierarchical_probs, format_hierarchy, inference_label, is_background_label
 from live_audio import LiveAudioBuffer, list_audio_input_devices
@@ -1003,7 +1004,7 @@ class JetsonGuiApp:
   def __init__(self, args: argparse.Namespace):
     self.args = args
     self.root = tk.Tk()
-    self.root.title("JetsonCA — Testing / Realtime")
+    self.root.title("JetsonCA — Testing / Realtime / Profile")
     self.root.geometry("1280x760")
     self.root.minsize(980, 600)
     self.root.protocol("WM_DELETE_WINDOW", self.on_close)
@@ -1059,6 +1060,9 @@ class JetsonGuiApp:
     self.audio_photo = None
     self.prob_bars: list[ttk.Progressbar] = []
     self.prob_labels: list[tk.StringVar] = []
+    self.profile_memory_var = tk.BooleanVar(value=True)
+    self.profile_resource_var = tk.BooleanVar(value=True)
+    self.profile_compute_var = tk.BooleanVar(value=True)
 
     self._build_ui()
     self.root.after(50, self._refresh_sensor_lists)
@@ -1119,10 +1123,23 @@ class JetsonGuiApp:
     notebook.grid(row=1, column=0, sticky="nsew")
     testing = ttk.Frame(notebook, padding=6)
     realtime = ttk.Frame(notebook, padding=6)
+    profile = ttk.Frame(notebook, padding=6)
     notebook.add(testing, text="Testing")
     notebook.add(realtime, text="Realtime")
+    notebook.add(profile, text="Profile")
+    self._control_notebook = notebook
+    self._profile_tab = profile
     self._fill_testing_tab(testing)
     self._fill_realtime_tab(realtime)
+    self._profile_run = mount_profile_tab(
+      profile,
+      defaults_fn=self._benchmark_defaults,
+      busy_fn=lambda: self.worker_thread is not None and self.worker_thread.is_alive(),
+      ui_after=self.root.after,
+      mem_var=self.profile_memory_var,
+      res_var=self.profile_resource_var,
+      cmp_var=self.profile_compute_var,
+    )
 
   def _fill_testing_tab(self, parent: ttk.Frame):
     parent.columnconfigure(1, weight=1)
@@ -1194,10 +1211,16 @@ class JetsonGuiApp:
     run_row = ttk.Frame(box)
     run_row.grid(row=1, column=0, columnspan=2, sticky="ew", padx=6, pady=6)
     ttk.Button(run_row, text="Start", command=self.start).pack(side="left", padx=(0, 6))
-    ttk.Button(run_row, text="Stop", command=self.stop).pack(side="left")
+    ttk.Button(run_row, text="Stop", command=self.stop).pack(side="left", padx=(0, 6))
+    ttk.Button(run_row, text="Benchmark", command=self._run_gui_benchmark).pack(side="left")
+    prof = ttk.Frame(box)
+    prof.grid(row=2, column=0, columnspan=2, sticky="w", padx=6, pady=(0, 4))
+    ttk.Checkbutton(prof, text="Memory", variable=self.profile_memory_var).pack(side="left", padx=(0, 8))
+    ttk.Checkbutton(prof, text="Resource", variable=self.profile_resource_var).pack(side="left", padx=(0, 8))
+    ttk.Checkbutton(prof, text="Compute", variable=self.profile_compute_var).pack(side="left")
 
     mod = ttk.LabelFrame(box, text="Modality dropout (while running)")
-    mod.grid(row=2, column=0, columnspan=2, sticky="ew", padx=4, pady=4)
+    mod.grid(row=3, column=0, columnspan=2, sticky="ew", padx=4, pady=4)
     ttk.Checkbutton(
       mod,
       text="Camera modality enabled",
@@ -1236,21 +1259,21 @@ class JetsonGuiApp:
       self.radar1_instance_cb.state(["disabled"])
       self.radar2_instance_cb.state(["disabled"])
 
-    ttk.Label(box, text="Dropout state").grid(row=3, column=0, sticky="w", padx=6, pady=3)
-    ttk.Label(box, textvariable=self.dropout_var, wraplength=340).grid(row=3, column=1, sticky="w", padx=6, pady=3)
-    ttk.Label(box, text="Audio verify").grid(row=4, column=0, sticky="w", padx=6, pady=3)
-    ttk.Label(box, textvariable=self.audio_verify_var, wraplength=340).grid(row=4, column=1, sticky="w", padx=6, pady=3)
-    ttk.Label(box, text="Run status").grid(row=5, column=0, sticky="w", padx=6, pady=3)
-    ttk.Label(box, textvariable=self.status_var, wraplength=340).grid(row=5, column=1, sticky="w", padx=6, pady=3)
-    ttk.Label(box, text="Latency").grid(row=6, column=0, sticky="w", padx=6, pady=3)
-    ttk.Label(box, textvariable=self.latency_var).grid(row=6, column=1, sticky="w", padx=6, pady=3)
-    ttk.Label(box, text="Range").grid(row=7, column=0, sticky="w", padx=6, pady=3)
-    ttk.Label(box, textvariable=self.range_var).grid(row=7, column=1, sticky="w", padx=6, pady=3)
-    ttk.Label(box, text="Radar").grid(row=8, column=0, sticky="w", padx=6, pady=3)
-    ttk.Label(box, textvariable=self.radar_status_var, wraplength=340).grid(row=8, column=1, sticky="w", padx=6, pady=3)
-    ttk.Label(box, text="Raw / conf").grid(row=9, column=0, sticky="w", padx=6, pady=3)
-    ttk.Label(box, textvariable=self.raw_var).grid(row=9, column=1, sticky="w", padx=6, pady=3)
-    ttk.Label(box, textvariable=self.conf_var).grid(row=9, column=2, sticky="w", padx=6, pady=3)
+    ttk.Label(box, text="Dropout state").grid(row=4, column=0, sticky="w", padx=6, pady=3)
+    ttk.Label(box, textvariable=self.dropout_var, wraplength=340).grid(row=4, column=1, sticky="w", padx=6, pady=3)
+    ttk.Label(box, text="Audio verify").grid(row=5, column=0, sticky="w", padx=6, pady=3)
+    ttk.Label(box, textvariable=self.audio_verify_var, wraplength=340).grid(row=5, column=1, sticky="w", padx=6, pady=3)
+    ttk.Label(box, text="Run status").grid(row=6, column=0, sticky="w", padx=6, pady=3)
+    ttk.Label(box, textvariable=self.status_var, wraplength=340).grid(row=6, column=1, sticky="w", padx=6, pady=3)
+    ttk.Label(box, text="Latency").grid(row=7, column=0, sticky="w", padx=6, pady=3)
+    ttk.Label(box, textvariable=self.latency_var).grid(row=7, column=1, sticky="w", padx=6, pady=3)
+    ttk.Label(box, text="Range").grid(row=8, column=0, sticky="w", padx=6, pady=3)
+    ttk.Label(box, textvariable=self.range_var).grid(row=8, column=1, sticky="w", padx=6, pady=3)
+    ttk.Label(box, text="Radar").grid(row=9, column=0, sticky="w", padx=6, pady=3)
+    ttk.Label(box, textvariable=self.radar_status_var, wraplength=340).grid(row=9, column=1, sticky="w", padx=6, pady=3)
+    ttk.Label(box, text="Raw / conf").grid(row=10, column=0, sticky="w", padx=6, pady=3)
+    ttk.Label(box, textvariable=self.raw_var).grid(row=10, column=1, sticky="w", padx=6, pady=3)
+    ttk.Label(box, textvariable=self.conf_var).grid(row=10, column=2, sticky="w", padx=6, pady=3)
 
     probs_box = ttk.LabelFrame(parent, text="Fused class probs")
     probs_box.grid(row=1, column=0, columnspan=3, sticky="nsew")
@@ -1504,6 +1527,49 @@ class JetsonGuiApp:
   def stop(self):
     if self.worker_thread is not None and self.worker_thread.is_alive():
       self.worker.stop()
+
+  def _run_gui_benchmark(self):
+    notebook = getattr(self, "_control_notebook", None)
+    tab = getattr(self, "_profile_tab", None)
+    if notebook is not None and tab is not None:
+      notebook.select(tab)
+    run = getattr(self, "_profile_run", None)
+    if run is not None:
+      run()
+
+  def _benchmark_defaults(self) -> dict[str, Any]:
+    cam = self._camera_index_from_var()
+    if cam < 0:
+      cam = int(getattr(self.args, "camera_device", 0) or 0)
+    try:
+      min_r = float(self.min_range_var.get())
+    except ValueError:
+      min_r = float(self.args.min_range_m)
+    try:
+      max_raw = self.max_range_var.get().strip()
+      max_r = float(max_raw) if max_raw else None
+    except ValueError:
+      max_r = self.args.max_range_m
+    return {
+      "checkpoint": Path(self.checkpoint_var.get()),
+      "device": str(self.args.device),
+      "window": int(getattr(self.worker, "window_len", 30)),
+      "camera_device": int(cam),
+      "camera_width": int(self.args.camera_width),
+      "camera_height": int(self.args.camera_height),
+      "camera_fps": float(self.args.camera_fps),
+      "num_rx": int(self.args.num_rx),
+      "radar_profile": str(self.args.radar_profile),
+      "frame_rate": float(self.args.frame_rate),
+      "radar1_uuid": _parse_radar_uuid_choice(self.radar1_uuid_var.get()),
+      "radar2_uuid": _parse_radar_uuid_choice(self.radar2_uuid_var.get()),
+      "radar1_port": getattr(self.args, "radar1_port", None),
+      "radar2_port": getattr(self.args, "radar2_port", None),
+      "no_mirror_radar2": not bool(getattr(self.args, "mirror_radar2", True)),
+      "min_range_m": min_r,
+      "max_range_m": max_r,
+      "n_radars": 0 if bool(getattr(self.args, "no_radar", False)) else 2,
+    }
 
   def _set_image(self, widget: ttk.Label, frame: np.ndarray, attr: str, size: tuple[int, int], *, letterbox: bool):
     img = _fit_frame(frame, size, letterbox=letterbox)
