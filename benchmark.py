@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """System-level benchmark: latency, params, FLOPs/MOPS + AI-DISCO KPI report.
 
-Target deployment profile: 1 camera + 2 radars (dual-radar early-fused), Jetson Nano class.
+Target deployment: 1 camera + 2 radars (+ audio when the checkpoint has enable_audio).
 
 Common commands:
   python benchmark.py
@@ -80,7 +80,7 @@ CLI_EXAMPLES = """Examples:
       Live USB-camera KPI bench; radar gated off (no radar SDK required).
 
   python benchmark.py --all-modes
-      Benchmark both, radar_only, and camera_only in one run.
+      Benchmark both, radar_only, camera_only, and audio_* ablations if the ckpt has audio.
 
   python benchmark.py --device cpu
       Force CPU benchmarking.
@@ -89,7 +89,10 @@ CLI_EXAMPLES = """Examples:
       More stable GPU timing with longer warmup and more measured runs.
 
   python benchmark.py --mode radar_only
-      Measure only the radar_present=true / camera_present=false path.
+      Measure radar_present=true / camera_present=false / audio_present=false.
+
+  python benchmark.py --mode audio_only
+      Audio-only ablation (requires enable_audio checkpoint).
 
   python benchmark.py --out artifacts/benchmark_cam1_radar2_kpi_RTX_5090.json
       Save results to a machine-specific JSON filename.
@@ -100,7 +103,7 @@ KEY_MEANINGS: dict[str, str] = {
   "weight_memory": "Parameter + registered buffer memory footprint of the model in RAM/VRAM.",
   "buffer_memory_estimate": "Approximate input-window buffer footprint for deployment, not peak activations.",
   "operation_specs": "Per-block theoretical operation breakdown for the primary mode.",
-  "profiles": "Per-mode benchmark results; usually contains both, radar_only, and/or camera_only.",
+  "profiles": "Per-mode results: both (cam+radar[+audio]), radar_only, camera_only, and audio_* ablations when the ckpt has audio.",
   "total_macs": "Total multiply-accumulate operations for one forward pass.",
   "total_mops": "Total MACs divided by 1e6. Despite the name, this is a count per inference, not per second.",
   "total_flops": "Total floating-point operations for one forward pass, using FLOPs = 2 * MACs.",
@@ -114,7 +117,7 @@ KEY_MEANINGS: dict[str, str] = {
   "conv_share": "Fraction of total theoretical compute spent in convolution layers.",
   "conv_mmacs": "Millions of MACs spent in convolution layers.",
   "temporal_transformer_mmacs": "Millions of MACs spent in temporal self-attention + feed-forward blocks.",
-  "cross_attention_mmacs": "Millions of MACs spent in radar-camera cross-attention blocks.",
+  "cross_attention_mmacs": "Millions of MACs spent in radar-camera-audio cross-attention blocks.",
   "mmacs_per_inference": "Total millions of MACs for one forward pass.",
   "gflops_per_inference": "Total billions of FLOPs for one forward pass.",
   "kpi.pass": "Boolean pass/fail results against the AI-DISCO deployment thresholds.",
@@ -151,13 +154,16 @@ def estimate_activation_buffer_mb(
   dtype_bytes: int = 4,
   n_cameras: int = 1,
   n_radars: int = 2,
+  n_audio: int = 0,
+  audio_h: int = 32,
+  audio_w: int = 32,
 ) -> dict[str, float]:
-  """Rough live-buffer estimate for cam1 + radar2 streaming window."""
+  """Rough live-buffer estimate for cam + dual radar + optional audio window."""
   cam_elems = batch * window * n_cameras * 3 * image_size * image_size
   radar_elems = batch * window * n_radars * 3 * radar_h * radar_w
-  # fused radar is one tensor after early fuse
   fused_radar_elems = batch * window * 3 * radar_h * radar_w
-  total_elems = cam_elems + radar_elems + fused_radar_elems
+  audio_elems = batch * window * n_audio * 1 * audio_h * audio_w
+  total_elems = cam_elems + radar_elems + fused_radar_elems + audio_elems
   bytes_ = total_elems * dtype_bytes
   return {
     "bytes": float(bytes_),
@@ -165,6 +171,7 @@ def estimate_activation_buffer_mb(
     "mb": float(bytes_) / (1024.0 ** 2),
     "n_cameras": float(n_cameras),
     "n_radars": float(n_radars),
+    "n_audio": float(n_audio),
     "note": "input window buffers only (not full activation peak)",
   }
 
@@ -479,17 +486,21 @@ def _module_name(root: nn.Module, target: nn.Module) -> str:
 
 def _classify_block(name: str) -> str:
   n = name or ""
-  if n.startswith("radar_encoder"):
+  if n.startswith("radar_encoder") or n.startswith("radar2_encoder"):
     return "conv_radar"
   if n.startswith("camera_encoder"):
     return "conv_camera"
-  if n.startswith("radar_temporal"):
+  if n.startswith("audio_encoder"):
+    return "conv_audio"
+  if n.startswith("radar_temporal") or n.startswith("radar2_temporal"):
     return "temporal_radar"
   if n.startswith("camera_temporal"):
     return "temporal_camera"
+  if n.startswith("audio_temporal"):
+    return "temporal_audio"
   if n.startswith("layers"):
     return "cross_attention"
-  if n.startswith(("shared_proj", "activity_classifier", "classifier", "human_classifier")):
+  if n.startswith(("shared_proj", "activity_classifier", "classifier", "human_classifier", "detect_classifier", "coarse_classifier", "subaction_classifier")):
     return "head"
   return "other"
 
@@ -543,8 +554,16 @@ def build_operation_specs(records: list[dict[str, Any]], *, total_macs: int) -> 
   for rec in records:
     by_block[str(rec.get("block", "other"))].append(rec)
 
-  conv_records = by_block.get("conv_radar", []) + by_block.get("conv_camera", [])
-  temporal_records = by_block.get("temporal_radar", []) + by_block.get("temporal_camera", [])
+  conv_records = (
+    by_block.get("conv_radar", [])
+    + by_block.get("conv_camera", [])
+    + by_block.get("conv_audio", [])
+  )
+  temporal_records = (
+    by_block.get("temporal_radar", [])
+    + by_block.get("temporal_camera", [])
+    + by_block.get("temporal_audio", [])
+  )
   cross_records = by_block.get("cross_attention", [])
   head_records = by_block.get("head", [])
 
@@ -564,10 +583,11 @@ def build_operation_specs(records: list[dict[str, Any]], *, total_macs: int) -> 
   return {
     "conv": {
       **conv,
-      "description": "Frame CNN encoders (radar_encoder + camera_encoder Conv2d)",
+      "description": "Frame CNN encoders (radar + camera + audio Conv2d)",
       "by_stream": {
         "radar": _agg_op_bundle(by_block.get("conv_radar", [])),
         "camera": _agg_op_bundle(by_block.get("conv_camera", [])),
+        "audio": _agg_op_bundle(by_block.get("conv_audio", [])),
       },
     },
     "temporal_transformer": {
@@ -578,13 +598,14 @@ def build_operation_specs(records: list[dict[str, Any]], *, total_macs: int) -> 
       "by_stream": {
         "radar": _agg_op_bundle(by_block.get("temporal_radar", [])),
         "camera": _agg_op_bundle(by_block.get("temporal_camera", [])),
+        "audio": _agg_op_bundle(by_block.get("temporal_audio", [])),
       },
       "attn_macs": int(sum(int(r["macs"]) for r in temporal_records if r["op"] == "multihead_attention")),
       "ffn_macs": int(sum(int(r["macs"]) for r in temporal_records if r["op"] == "linear")),
     },
     "cross_attention": {
       **cross,
-      "description": "CrossAttentionBlock stack (radar↔camera MHA + FFN)",
+      "description": "CrossAttentionBlock stack (radar↔camera↔audio MHA + FFN)",
     },
     "head": {
       **head,
@@ -700,6 +721,80 @@ def _sync(device: torch.device):
   if device.type == "cuda":
     torch.cuda.synchronize(device)
 
+
+BENCH_MODES = (
+  "both",
+  "radar_only",
+  "camera_only",
+  "audio_only",
+  "audio_radar",
+  "audio_camera",
+)
+
+
+def _enable_audio(model: nn.Module) -> bool:
+  return bool(getattr(model, "enable_audio", False))
+
+
+def modality_present(mode: str, *, enable_audio: bool) -> tuple[bool, bool, bool]:
+  """radar, camera, audio flags. `both` = all streams the ckpt actually has."""
+  table = {
+    "both": (True, True, True),
+    "radar_only": (True, False, False),
+    "camera_only": (False, True, False),
+    "audio_only": (False, False, True),
+    "audio_radar": (True, False, True),
+    "audio_camera": (False, True, True),
+  }
+  if mode not in table:
+    raise ValueError(f"unknown bench mode {mode!r}")
+  radar_on, camera_on, audio_on = table[mode]
+  if not enable_audio:
+    if mode in ("audio_only", "audio_radar", "audio_camera"):
+      raise SystemExit(f"--mode {mode} requires an audio checkpoint")
+    audio_on = False
+  return radar_on, camera_on, audio_on
+
+
+def synth_audio_kwargs(
+  model: nn.Module,
+  device: torch.device,
+  *,
+  batch: int,
+  window: int,
+  present: bool,
+) -> dict[str, Any]:
+  if not _enable_audio(model):
+    return audio_off_kwargs(model, device)
+  n_mels = int(getattr(model, "audio_n_mels", 32) or 32)
+  n_w = int(getattr(model, "audio_mel_width", 32) or 32)
+  audio = torch.randn(batch, window, 1, n_mels, n_w, device=device, dtype=torch.float32)
+  if not present:
+    audio = torch.zeros_like(audio)
+  return {
+    "audio": audio,
+    "audio_present": torch.full((batch,), bool(present), dtype=torch.bool, device=device),
+  }
+
+
+def _model_forward(
+  model: nn.Module,
+  radar: torch.Tensor,
+  camera: torch.Tensor,
+  radar_present: torch.Tensor,
+  camera_present: torch.Tensor,
+  extra: dict | None = None,
+):
+  kw = extra or {}
+  return model(
+    radar,
+    camera,
+    radar_present=radar_present,
+    camera_present=camera_present,
+    **kw,
+  )
+
+
 def measure_latency(
   model: nn.Module,
   radar: torch.Tensor,
@@ -710,35 +805,23 @@ def measure_latency(
   warmup: int,
   runs: int,
   device: torch.device,
+  extra: dict | None = None,
   radar2: torch.Tensor | None = None,
 ) -> dict[str, float]:
   model.eval()
-  if radar2 is None:
-    radar2 = radar
+  extra = dict(extra or {})
+  if radar2 is not None:
+    extra.setdefault("radar2", radar2)
   with torch.no_grad():
     for _ in range(warmup):
-      model(
-        radar,
-        camera,
-        radar2=radar2,
-        radar_present=radar_present,
-        camera_present=camera_present,
-        **audio_off_kwargs(model, device),
-      )
+      _model_forward(model, radar, camera, radar_present, camera_present, extra)
     _sync(device)
 
     times_ms: list[float] = []
     for _ in range(runs):
       _sync(device)
       t0 = time.perf_counter()
-      model(
-        radar,
-        camera,
-        radar2=radar2,
-        radar_present=radar_present,
-        camera_present=camera_present,
-        **audio_off_kwargs(model, device),
-      )
+      _model_forward(model, radar, camera, radar_present, camera_present, extra)
       _sync(device)
       times_ms.append((time.perf_counter() - t0) * 1000.0)
 
@@ -798,22 +881,17 @@ def profile_mode(
   count_flops: bool = True,
 ) -> dict[str, Any]:
   radar, radar2, camera = make_inputs(batch=batch, window=window, image_size=image_size, device=device)
-  radar_on = mode in ("both", "radar_only")
-  camera_on = mode in ("both", "camera_only")
+  enable_audio = _enable_audio(model)
+  radar_on, camera_on, audio_on = modality_present(mode, enable_audio=enable_audio)
   radar_present = torch.full((batch,), radar_on, dtype=torch.bool, device=device)
   camera_present = torch.full((batch,), camera_on, dtype=torch.bool, device=device)
+  extra = synth_audio_kwargs(model, device, batch=batch, window=window, present=audio_on)
+  extra["radar2"] = radar2
 
   if count_flops:
     with FlopCounter(model) as counter:
       with torch.no_grad():
-        model(
-          radar,
-          camera,
-          radar2=radar2,
-          radar_present=radar_present,
-          camera_present=camera_present,
-          **audio_off_kwargs(model, device),
-        )
+        _model_forward(model, radar, camera, radar_present, camera_present, extra)
     compute = counter.summary()
   else:
     compute = {
@@ -838,7 +916,7 @@ def profile_mode(
     warmup=warmup,
     runs=runs,
     device=device,
-    radar2=radar2,
+    extra=extra,
   )
 
   mean_s = latency["latency_ms_mean"] / 1000.0
@@ -859,6 +937,8 @@ def profile_mode(
       "camera_shape": list(camera.shape),
       "radar_present": radar_on,
       "camera_present": camera_on,
+      "audio_present": audio_on,
+      "enable_audio": enable_audio,
     },
     "compute": compute,
     "latency": latency,
@@ -910,6 +990,8 @@ def profile_live_mode(
   radar2_buffer: deque[torch.Tensor] = deque(maxlen=window)
   radar_present = torch.tensor([not camera_only], dtype=torch.bool, device=device)
   camera_present = torch.ones((1,), dtype=torch.bool, device=device)
+  live_audio_on = _enable_audio(model) and not camera_only
+  audio_kw = synth_audio_kwargs(model, device, batch=1, window=window, present=live_audio_on)
 
   model.eval()
   camera_stream = CameraStream(camera_device, camera_width, camera_height, camera_fps).start()
@@ -920,15 +1002,10 @@ def profile_live_mode(
   measured = 0
 
   def _run_forward(radar_t: torch.Tensor, camera_t: torch.Tensor, radar2_t: torch.Tensor | None = None) -> None:
+    extra = dict(audio_kw)
+    extra["radar2"] = radar2_t if radar2_t is not None else radar_t
     with torch.no_grad():
-      model(
-        radar_t,
-        camera_t,
-        radar2=radar2_t if radar2_t is not None else radar_t,
-        radar_present=radar_present,
-        camera_present=camera_present,
-        **audio_off_kwargs(model, device),
-      )
+      _model_forward(model, radar_t, camera_t, radar_present, camera_present, extra)
 
   def _measure_once(
     radar_t: torch.Tensor,
@@ -1071,6 +1148,8 @@ def profile_live_mode(
       "camera_shape": [1, window, 3, image_size, image_size],
       "radar_present": not camera_only,
       "camera_present": True,
+      "audio_present": live_audio_on,
+      "enable_audio": _enable_audio(model),
     },
     "live_capture": {
       "camera_device": camera_device,
@@ -1093,7 +1172,7 @@ def profile_live_mode(
         (
           "camera_only: radar tensor is zeros with radar_present=False; no radar SDK."
           if camera_only
-          else "total_loop_ms includes live sensor polling, radar fusion, camera fetch/preprocess, and model inference."
+          else "total_loop_ms includes live sensor polling, radar fusion, camera fetch/preprocess, and model inference (synth audio if ckpt has audio)."
         ),
         "latency.* remains model-forward latency only so KPI thresholds stay comparable.",
       ],
@@ -1118,12 +1197,16 @@ def run_benchmark(args) -> dict[str, Any]:
   params = count_parameters(model)
   params_by_block = count_parameters_by_block(model)
   weight_mem = weight_memory_bytes(model)
+  enable_audio = _enable_audio(model)
   buffer_mem = estimate_activation_buffer_mb(
     batch=args.batch_size,
     window=args.window,
     image_size=int(config["image_size"]),
     n_cameras=args.n_cameras,
     n_radars=args.n_radars,
+    n_audio=1 if enable_audio else 0,
+    audio_h=int(getattr(model, "audio_n_mels", 32) or 32),
+    audio_w=int(getattr(model, "audio_mel_width", 32) or 32),
   )
   platform_info = collect_platform_info(device)
   do_memory = bool(getattr(args, "profile_memory", True))
@@ -1146,6 +1229,8 @@ def run_benchmark(args) -> dict[str, Any]:
         raise SystemExit("--all-modes is not supported with --live (pick --mode both or camera_only)")
       if live_mode == "radar_only":
         raise SystemExit("--live --mode radar_only is not supported yet")
+      if live_mode in ("audio_only", "audio_radar", "audio_camera"):
+        raise SystemExit(f"--live --mode {live_mode} is not supported (use both or camera_only)")
       profiles = [
         profile_live_mode(
           model,
@@ -1173,7 +1258,12 @@ def run_benchmark(args) -> dict[str, Any]:
         )
       ]
     else:
-      modes = ["both", "radar_only", "camera_only"] if args.all_modes else [args.mode]
+      if args.all_modes:
+        modes = ["both", "radar_only", "camera_only"]
+        if enable_audio:
+          modes.extend(["audio_only", "audio_radar", "audio_camera"])
+      else:
+        modes = [args.mode]
       profiles = [
         profile_mode(
           model,
@@ -1206,8 +1296,12 @@ def run_benchmark(args) -> dict[str, Any]:
     )
   primary_specs = primary.get("compute", {}).get("operation_specs", {})
 
-  deploy_profile = "cam1_radar2"
-  deploy_note = "Model sees 1 camera stream + 1 fused dual-radar stream (early fuse)."
+  deploy_profile = "cam1_radar2_audio" if enable_audio else "cam1_radar2"
+  deploy_note = (
+    "1 camera + dual radar + audio (audio_present=True when mode includes audio)."
+    if enable_audio
+    else "Model sees 1 camera stream + 1 fused dual-radar stream (early fuse)."
+  )
   if args.live and args.mode == "camera_only":
     deploy_profile = "cam1_radar_off"
     deploy_note = "Live camera-only: radar zeros + radar_present=False (no radar SDK)."
@@ -1222,6 +1316,8 @@ def run_benchmark(args) -> dict[str, Any]:
       "profile": deploy_profile,
       "n_cameras": int(args.n_cameras),
       "n_radars": 0 if (args.live and args.mode == "camera_only") else int(args.n_radars),
+      "n_audio": 1 if enable_audio else 0,
+      "enable_audio": enable_audio,
       "note": deploy_note,
     },
     "labels": labels,
@@ -1247,12 +1343,12 @@ def run_benchmark(args) -> dict[str, Any]:
       "MFLOPs = FLOPs / 1e6.",
       "achieved_mops_per_s = theoretical MACs / measured mean latency.",
       "AI-DISCO KPI targets for Jetson Nano–class cam1+radar2 deployment.",
-      "operation_specs.conv = radar+camera ConvFrameEncoder Conv2d cost.",
-      "operation_specs.temporal_transformer = radar/camera TemporalEncoder "
+      "operation_specs.conv includes radar, camera, and audio ConvFrameEncoder when present.",
+      "operation_specs.temporal_transformer includes per-modality TemporalEncoder "
       "(TransformerEncoderLayer self-attn + FFN).",
       "Linear layers nested under MultiheadAttention are not double-counted.",
-      "Current forward always runs radar+camera encoders; modality flags zero tokens after encode "
-      "(so radar_only/camera_only theoretical MACs match both until early-skip is added).",
+      "both = camera + dual radar + audio (if ckpt enable_audio). "
+      "Ablations set modality_present=False (encoders still run until early-skip exists).",
     ],
     "profiles": profiles,
   }
@@ -1280,7 +1376,8 @@ def format_profile_report(report: dict[str, Any]) -> str:
     f"checkpoint  {report.get('checkpoint')}",
     f"device      {report.get('device')}  gpu={plat.get('gpu_name') or 'cpu'}",
     f"platform    {plat.get('hostname')}  {plat.get('os')}",
-    f"source      {report.get('benchmark_source')}  deploy={dep.get('profile')}",
+    f"source      {report.get('benchmark_source')}  deploy={dep.get('profile')}  "
+    f"audio={dep.get('n_audio', 0)}",
     f"params      {report['parameters']['total']:,}  ({report.get('parameters_millions')} M)",
   ]
   if flags.get("memory", True):
@@ -1335,6 +1432,11 @@ def format_profile_report(report: dict[str, Any]) -> str:
       lat = profile.get("latency") or {}
       perf = profile.get("performance") or {}
       lines.append(f"  [{profile.get('mode')}]")
+      inp = profile.get("input") or {}
+      lines.append(
+        f"    present  radar={inp.get('radar_present')}  "
+        f"camera={inp.get('camera_present')}  audio={inp.get('audio_present')}"
+      )
       lines.append(
         f"    latency  mean={lat.get('latency_ms_mean', 0):.2f} ms  "
         f"p95={lat.get('latency_ms_p95', 0):.2f} ms  "
@@ -1360,7 +1462,7 @@ def _print_summary(report: dict[str, Any]):
   if plat.get("gpu_name"):
     print(f"gpu:        {plat['gpu_name']}  ({plat.get('gpu_total_memory_mb')} MB)")
   dep = report.get("deployment", {})
-  print(f"deploy:     {dep.get('profile')}  cams={dep.get('n_cameras')}  radars={dep.get('n_radars')}")
+  print(f"deploy:     {dep.get('profile')}  cams={dep.get('n_cameras')}  radars={dep.get('n_radars')}  audio={dep.get('n_audio', 0)}")
   print(f"params:     {report['parameters']['total']:,} ({report['parameters_millions']} M)")
   wm = report.get("weight_memory", {})
   bm = report.get("buffer_memory_estimate", {})
@@ -1556,8 +1658,17 @@ def parse_args():
   parser.add_argument("--window", type=int, default=30, help="Temporal window length (frames)")
   parser.add_argument("--warmup", type=int, default=5 if is_jetson() else 10)
   parser.add_argument("--runs", type=int, default=30 if is_jetson() else 50)
-  parser.add_argument("--mode", choices=("both", "radar_only", "camera_only"), default="both")
-  parser.add_argument("--all-modes", action="store_true", help="Benchmark both + radar_only + camera_only")
+  parser.add_argument(
+    "--mode",
+    choices=BENCH_MODES,
+    default="both",
+    help="both = cam+radar[+audio if ckpt]. audio_* need an audio checkpoint.",
+  )
+  parser.add_argument(
+    "--all-modes",
+    action="store_true",
+    help="Benchmark both + radar_only + camera_only [+ audio_only/audio_radar/audio_camera]",
+  )
   parser.add_argument("--live", action="store_true", help="Use live USB camera (and radar unless --mode camera_only)")
   parser.add_argument("--n-cameras", type=int, default=1, help="Deployment camera count (KPI buffer est.)")
   parser.add_argument("--n-radars", type=int, default=2, help="Deployment radar count (KPI buffer est.)")

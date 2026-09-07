@@ -88,7 +88,7 @@ def mount_profile_tab(
   ttk.Checkbutton(opts, text="Computational (latency, FLOPs/MACs)", variable=cmp_var).grid(
     row=2, column=0, sticky="w", padx=4, pady=2
   )
-  ttk.Checkbutton(opts, text="All modes (both + radar_only + camera_only)", variable=all_modes_var).grid(
+  ttk.Checkbutton(opts, text="All modes (cam / radar / audio ablations)", variable=all_modes_var).grid(
     row=3, column=0, sticky="w", padx=4, pady=2
   )
   ttk.Checkbutton(opts, text="Live sensors (USB cam ± radar)", variable=live_var).grid(
@@ -100,9 +100,9 @@ def mount_profile_tab(
   ttk.Combobox(
     row,
     textvariable=mode_var,
-    values=("both", "radar_only", "camera_only"),
+    values=("both", "radar_only", "camera_only", "audio_only", "audio_radar", "audio_camera"),
     state="readonly",
-    width=14,
+    width=16,
   ).pack(side="left", padx=(6, 12))
   ttk.Label(row, text="Runs").pack(side="left")
   ttk.Entry(row, textvariable=runs_var, width=6).pack(side="left", padx=(6, 0))
