@@ -28,7 +28,7 @@ from audio_features import mel_tensor_from_wave, render_audio_monitor_rgb
 from checkpoint import default_checkpoint, load_checkpoint, preprocess_camera_frame
 from device_select import match_audio_to_camera, prefer_microsoft
 from jetson_env import apply_jetson_runtime_tweaks, default_device
-from label_hierarchy import apply_logit_bias, combine_hierarchical_probs, format_hierarchy, inference_label
+from label_hierarchy import apply_logit_bias, combine_hierarchical_probs, format_hierarchy, inference_label, is_background_label
 from live_audio import LiveAudioBuffer, list_audio_input_devices
 from radar_utils import (
   DualRadarSession,
@@ -38,7 +38,7 @@ from radar_utils import (
   list_radar_uuids,
   render_radar_panel,
 )
-from range_gating import estimate_peak_range_m, has_radar_motion, in_recognition_range, profile_metrics
+from range_gating import camera_motion_score, estimate_peak_range_m, has_radar_motion, in_recognition_range, profile_metrics
 
 try:
   from detector_pipeline import apply_camera_roi_crop_seq, apply_cfar_mask_to_radar_seq
@@ -208,7 +208,10 @@ class InferenceWorker:
     self.enable_detect_head = bool(self.config.get("has_detect_head") or self.config.get("enable_detect_head", False)) or (
       getattr(self.model, "detect_classifier", None) is not None
     )
-    self.use_motion_gate = bool(use_motion_gate) and not self.enable_detect_head
+    activity_only = [x for x in self.labels if not is_background_label(x)]
+    self.walking_only = len(activity_only) == 1 and activity_only[0] == "walking"
+    # walking_bg ckpt: activity head is 1-class (always "walking"). Still vs walk is radar motion.
+    self.use_motion_gate = bool(use_motion_gate) or self.walking_only
 
     self.stop_event = threading.Event()
     self.state_lock = threading.Lock()
@@ -220,6 +223,11 @@ class InferenceWorker:
     self.logit_bias = {"walking_towards": float(towards_bias)} if towards_bias else {}
     self.motion_threshold = float(motion_threshold)
     self.peak_ratio = float(peak_ratio)
+    self.camera_motion_threshold = 0.02
+    self._cached_radar_motion = True
+    self._cached_camera_motion = True
+    self._cached_in_range = True
+    self._audio_retry_at = 0.0
     self.pred_hist: deque[str] = deque(maxlen=self.smooth_n)
     self.radar_enabled = not no_radar
     self.camera_enabled = True
@@ -255,7 +263,7 @@ class InferenceWorker:
       "radar_status": "off" if no_radar else "not started",
       "target_range_m": 0.0,
       "in_range": False,
-      "probs": np.zeros(len(self.labels), dtype=np.float32),
+      "probs": np.zeros(len(self.display_labels), dtype=np.float32),
       "camera_rgb": _placeholder_rgb("Camera idle", camera_width, camera_height),
       "radar_rgb": np.zeros((64, 64, 3), dtype=np.uint8),
       "audio_rgb": _placeholder_rgb("Audio idle", 320, 180),
@@ -302,8 +310,82 @@ class InferenceWorker:
 
   def set_audio_device(self, device_index: int | str | None, *, input_enabled: bool = True):
     with self.state_lock:
+      changed = device_index != self.audio_device_index or bool(input_enabled) != self.audio_input_enabled
       self.audio_device_index = device_index
       self.audio_input_enabled = bool(input_enabled)
+    if changed and self.audio_buffer.running:
+      self.audio_buffer.stop()
+    self._audio_retry_at = 0.0
+
+  @property
+  def display_labels(self) -> list[str]:
+    labels = list(self.config.get("all_labels") or self.labels)
+    if not any(is_background_label(label) for label in labels):
+      return ["background", *list(self.labels)]
+    return labels
+
+  @staticmethod
+  def _fused_display_probs(
+    presence: float,
+    activity_probs: np.ndarray,
+    display_labels: list[str],
+    *,
+    emit_activity: bool,
+  ) -> np.ndarray:
+    act_labels = [label for label in display_labels if not is_background_label(label)]
+    out = np.zeros(len(display_labels), dtype=np.float32)
+    if not emit_activity:
+      for idx, label in enumerate(display_labels):
+        if is_background_label(label):
+          out[idx] = 1.0
+      return out
+    human_p = float(np.clip(presence, 0.0, 1.0))
+    act = np.asarray(activity_probs, dtype=np.float32).reshape(-1)
+    for idx, label in enumerate(display_labels):
+      if is_background_label(label):
+        out[idx] = 1.0 - human_p
+      elif label in act_labels:
+        ai = act_labels.index(label)
+        if ai < act.size:
+          out[idx] = human_p * float(act[ai])
+    total = float(out.sum())
+    if total > 1e-8:
+      out /= total
+    return out
+
+  @staticmethod
+  def _label_from_display_probs(
+    display_probs: np.ndarray,
+    display_labels: list[str],
+  ) -> tuple[str, float]:
+    probs = np.asarray(display_probs, dtype=np.float32).reshape(-1)
+    if probs.size == 0 or not display_labels:
+      return "background", 0.0
+    idx = int(np.argmax(probs[: len(display_labels)]))
+    return display_labels[idx], float(probs[idx])
+
+  def _motion_ok(self, radar_present: bool, camera_present: bool) -> bool:
+    if not self.use_motion_gate:
+      return True
+    if radar_present and getattr(self, "_cached_radar_motion", True) is False:
+      return False
+    if camera_present and not radar_present and getattr(self, "_cached_camera_motion", True) is False:
+      return False
+    return True
+
+  def _ensure_audio(self):
+    if not (self.enable_audio and self.audio_input_enabled):
+      if self.audio_buffer.running:
+        self.audio_buffer.stop()
+      return
+    if self.audio_buffer.running:
+      return
+    now = time.time()
+    if now < float(getattr(self, "_audio_retry_at", 0.0)):
+      return
+    self.audio_buffer.start(device=self.audio_device_index)
+    if not self.audio_buffer.running:
+      self._audio_retry_at = now + 1.0
 
   def get_state(self) -> dict[str, Any]:
     with self.state_lock:
@@ -443,12 +525,11 @@ class InferenceWorker:
         )
       probs = apply_logit_bias(probs, self.labels, self.logit_bias)
       human_prob, detect_prob = self._presence_probs(out)
-      # With learned DETECT, classical Doppler motion must not override class selection
-      # (standing / slow motion still has a person → DETECT high, motion gate false).
-      motion_ok = True
-      if self.use_motion_gate and radar_present:
-        motion_ok = bool(getattr(self, "_cached_radar_motion", True))
+      motion_ok = self._motion_ok(radar_present, camera_present)
       presence = detect_prob if self.enable_detect_head else human_prob
+      # walking_bg: 1-class activity softmax is always walking. Doppler is walk vs still.
+      if self.walking_only and motion_ok:
+        presence = max(presence, 1.0)
       audio_solo = (not radar_present) and (not camera_present) and bool(self.audio_enabled and self.enable_audio)
       if audio_solo:
         human_thr = 0.0
@@ -465,14 +546,6 @@ class InferenceWorker:
         motion_ok=motion_ok,
         in_range=(not self.require_in_range) or (not radar_present) or getattr(self, "_cached_in_range", True),
       )
-      # Near-ties: still expose top activity so bars and prediction agree.
-      if label in ("uncertain", "background") and self.enable_detect_head and detect_prob >= self.detect_threshold:
-        activity_labels = [x for x in self.labels if x not in ("background", "no_human", "empty", "idle")]
-        p = np.asarray(probs, dtype=np.float32).reshape(-1)
-        if p.size and activity_labels:
-          top = int(np.argmax(p[: len(activity_labels)]))
-          label = activity_labels[top]
-          conf = float(p[top])
       return probs, label, conf, human_prob, detect_prob
 
   def _smooth_label(self, label: str) -> str:
@@ -510,14 +583,15 @@ class InferenceWorker:
         self.latest_state["status"] = "no camera selected"
         self.latest_state["camera_rgb"] = _placeholder_rgb("No camera selected", self.camera_width, self.camera_height)
 
-    if self.enable_audio and self.audio_input_enabled:
-      self.audio_buffer.start(device=self.audio_device_index)
+    self._ensure_audio()
 
     t0 = time.time()
     n_infer = 0
 
     def _loop_body(radar_session: DualRadarSession | None):
       nonlocal n_infer
+
+      self._ensure_audio()
 
       with self.state_lock:
         radar_on = self.radar_enabled
@@ -609,7 +683,7 @@ class InferenceWorker:
       human_prob = 0.0
       detect_prob = 0.0
       gate_open = False
-      probs = np.zeros(len(self.labels), dtype=np.float32)
+      probs = np.zeros(len(self.display_labels), dtype=np.float32)
       latency_ms = 0.0
       target_range_m = 0.0
       in_range = False
@@ -649,6 +723,11 @@ class InferenceWorker:
         else:
           self._cached_in_range = True
           self._cached_radar_motion = True
+
+        self._cached_camera_motion = True
+        if camera_on and len(self.camera_buffer) >= 2:
+          cam_score = camera_motion_score(torch.stack(list(self.camera_buffer), dim=0))
+          self._cached_camera_motion = cam_score >= self.camera_motion_threshold
 
         if len(self.radar1_buffer) >= self.window_len:
           radar_np = torch.stack(list(self.radar1_buffer), dim=0).numpy()
@@ -715,7 +794,7 @@ class InferenceWorker:
 
         self._sync()
         t1 = time.perf_counter()
-        probs, label, conf, human_prob, detect_prob = self._predict(
+        activity_probs, label, conf, human_prob, detect_prob = self._predict(
           radar_t,
           camera_t,
           radar_present=radar_present,
@@ -726,14 +805,43 @@ class InferenceWorker:
         latency_ms = (time.perf_counter() - t1) * 1000.0
         n_infer += 1
 
-        gate_open = detect_prob >= threshold
+        motion_ok = self._motion_ok(radar_present, camera_present)
+        in_range_ok = (not self.require_in_range) or (not radar_on) or in_range
+        audio_solo = (not radar_on) and (not camera_on) and bool(audio_on)
+        if audio_solo:
+          human_ok = True
+        elif self.enable_detect_head:
+          human_ok = detect_prob >= threshold
+        else:
+          human_ok = human_prob >= self.human_threshold
+        if self.walking_only:
+          emit_activity = motion_ok and in_range_ok
+          display_human = 1.0 if emit_activity else 0.0
+          gate_open = emit_activity
+        else:
+          emit_activity = human_ok and motion_ok and in_range_ok
+          display_human = detect_prob if self.enable_detect_head else human_prob
+          gate_open = detect_prob >= threshold if self.enable_detect_head else human_ok
+        probs = self._fused_display_probs(
+          display_human,
+          activity_probs,
+          self.display_labels,
+          emit_activity=emit_activity,
+        )
+        label, conf = self._label_from_display_probs(probs, self.display_labels)
         prediction = label
         confidence = conf
         raw_prediction = label
         suppress_reason = ""
         if not gate_open:
-          prediction = "none"
-          suppress_reason = f"gate closed (det={detect_prob:.2f})"
+          if self.walking_only:
+            prediction = label
+            suppress_reason = f"no motion (det={detect_prob:.2f})"
+          else:
+            prediction = "none"
+            suppress_reason = (
+              f"gate closed (det={detect_prob:.2f} motion={'ok' if motion_ok else 'off'})"
+            )
         elif label == "uncertain":
           prediction = "none"
           suppress_reason = "low margin"
@@ -767,7 +875,7 @@ class InferenceWorker:
             "human_prob": human_prob,
             "detect_prob": detect_prob,
             "gate_open": gate_open,
-            "motion_ok": bool(getattr(self, "_cached_radar_motion", True)),
+            "motion_ok": bool(self._motion_ok(radar_on, camera_on)),
             "latency_ms": latency_ms,
             "fps": n_infer / max(time.time() - t0, 1e-6),
             "radar_status": radar_status,
@@ -1058,12 +1166,12 @@ class JetsonGuiApp:
     ttk.Combobox(
       eval_box,
       textvariable=self.expected_label_var,
-      values=["(none)", *list(self.worker.labels)],
+      values=["(none)", *list(self.worker.display_labels)],
       state="readonly",
       width=28,
     ).grid(row=0, column=1, sticky="w", padx=6, pady=3)
     ttk.Label(eval_box, text="Classes").grid(row=1, column=0, sticky="nw", padx=6, pady=3)
-    ttk.Label(eval_box, text=", ".join(self.worker.labels), wraplength=360, justify="left").grid(
+    ttk.Label(eval_box, text=", ".join(self.worker.display_labels), wraplength=360, justify="left").grid(
       row=1, column=1, sticky="w", padx=6, pady=3
     )
     ttk.Label(eval_box, text="Detect threshold").grid(row=2, column=0, sticky="w", padx=6, pady=3)
@@ -1148,14 +1256,14 @@ class JetsonGuiApp:
     probs_box.grid(row=1, column=0, columnspan=3, sticky="nsew")
     probs_box.columnconfigure(1, weight=1)
     parent.rowconfigure(1, weight=1)
-    for idx, label in enumerate(self.worker.labels):
+    for idx, label in enumerate(self.worker.display_labels):
       var = tk.StringVar(value=f"{label}: 0.00")
       self.prob_labels.append(var)
       ttk.Label(probs_box, textvariable=var).grid(row=idx, column=0, sticky="w", pady=1)
       bar = ttk.Progressbar(probs_box, maximum=100.0, length=180)
       bar.grid(row=idx, column=1, sticky="ew", padx=(8, 0), pady=1)
       self.prob_bars.append(bar)
-    rel = len(self.worker.labels)
+    rel = len(self.worker.display_labels)
     ttk.Label(probs_box, text="Camera reliance").grid(row=rel, column=0, sticky="w", padx=2, pady=2)
     ttk.Label(probs_box, textvariable=self.reliance_camera_var).grid(row=rel, column=1, sticky="w")
     self.camera_reliance_bar = ttk.Progressbar(probs_box, maximum=100, length=180)
@@ -1197,7 +1305,7 @@ class JetsonGuiApp:
     elif self._audio_devices:
       self.audio_device_var.set(str(self._audio_devices[0]["label"]))
     else:
-      self.audio_device_var.set("(none)")
+      self.audio_device_var.set("(default)")
 
   def _on_camera_selected(self):
     self._select_audio_matching_camera()
@@ -1387,6 +1495,8 @@ class JetsonGuiApp:
     if not audio_on:
       self.audio_enabled_var.set(False)
     self._apply_modality_dropout()
+    if input_on:
+      self.worker._ensure_audio()
     self.worker_thread = threading.Thread(target=self.worker.run, daemon=True)
     self.worker_thread.start()
     self.status_var.set("starting…")
@@ -1415,7 +1525,9 @@ class JetsonGuiApp:
     self.conf_var.set(f"{float(state['confidence']):.2f}")
     self.raw_var.set(str(state.get("raw_prediction", "-")))
     detect_p = float(state.get("detect_prob", 0.0))
-    self.detect_var.set(f"detect={detect_p:.2f}")
+    human_p = float(state.get("human_prob", 0.0))
+    motion_ok = bool(state.get("motion_ok", True))
+    self.detect_var.set(f"detect={detect_p:.2f}  human={human_p:.2f}  motion={'ok' if motion_ok else 'off'}")
     self.gate_var.set("GATE OPEN" if bool(state.get("gate_open", False)) else "GATE closed")
     self.latency_var.set(f"{float(state['latency_ms']):.1f} ms  (~{float(state['fps']):.1f} infer/s)")
     target_range = float(state.get("target_range_m", 0.0))
@@ -1429,7 +1541,7 @@ class JetsonGuiApp:
     for idx, (bar, label_var) in enumerate(zip(self.prob_bars, self.prob_labels)):
       value = float(probs[idx]) if idx < len(probs) else 0.0
       bar["value"] = value * 100.0
-      label_var.set(f"{self.worker.labels[idx]}: {value:.2f}")
+      label_var.set(f"{self.worker.display_labels[idx]}: {value:.2f}")
 
     rel = state.get("reliance") or {}
     cam_r = float(rel.get("camera", 0.0))
@@ -1505,7 +1617,7 @@ def parse_args():
   p.add_argument("--peak-ratio", type=float, default=5.0,
                  help="Only used with --use-motion-gate")
   p.add_argument("--use-motion-gate", action="store_true",
-                 help="Force classical Doppler motion gate (ignored when DETECT head is present)")
+                 help="Force Doppler motion gate (already on for walking-only checkpoints)")
   p.add_argument("--live-detector-preprocess", action="store_true",
                  help="Apply train-time CFAR/ROI live (slow on Jetson; off by default)")
   p.add_argument("--no-range-gate", action="store_true",

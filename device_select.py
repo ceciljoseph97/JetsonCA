@@ -183,25 +183,40 @@ def windows_audio_names() -> list[str]:
   return _dedupe([ln.strip() for ln in raw.splitlines() if ln.strip()])
 
 
-def linux_audio_names() -> list[str]:
-  names: list[str] = []
+def linux_audio_devices() -> list[dict[str, str]]:
+  """ALSA capture endpoints with open ids (plughw:card,dev) plus Pulse sources."""
+  devices: list[dict[str, str]] = []
   arecord = shutil.which("arecord")
   if arecord:
     raw = _run([arecord, "-l"])
+    card_idx: str | None = None
+    card_name = ""
     for line in raw.splitlines():
-      m = re.search(r"card\s+(\d+):[^\[]*\[([^\]]+)\]", line, re.I)
-      if m:
-        names.append(m.group(2).strip())
-  if names:
-    return _dedupe(names)
+      m_card = re.search(r"card\s+(\d+):\s*(\S+)\s*\[([^\]]+)\]", line, re.I)
+      if m_card:
+        card_idx = m_card.group(1)
+        card_name = m_card.group(3).strip()
+        continue
+      m_dev = re.search(r"device\s+(\d+):", line, re.I)
+      if m_dev and card_idx is not None:
+        hw = f"plughw:{card_idx},{m_dev.group(1)}"
+        devices.append({"name": card_name or hw, "open": hw, "alsa": hw})
   pactl = shutil.which("pactl")
   if pactl:
     raw = _run([pactl, "list", "short", "sources"])
     for line in raw.splitlines():
       parts = line.split("\t")
-      if len(parts) >= 2 and "monitor" not in parts[1].lower():
-        names.append(parts[1].strip())
-  return _dedupe(names)
+      if len(parts) < 2 or "monitor" in parts[1].lower():
+        continue
+      src = parts[1].strip()
+      if any(d.get("open") == src for d in devices):
+        continue
+      devices.append({"name": src, "open": src, "alsa": src})
+  return devices
+
+
+def linux_audio_names() -> list[str]:
+  return _dedupe([d["name"] for d in linux_audio_devices() if d.get("name")])
 
 
 def linux_camera_names_by_index() -> dict[int, str]:
