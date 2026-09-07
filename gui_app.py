@@ -26,7 +26,7 @@ from tkinter import ttk
 
 from audio_features import mel_tensor_from_wave, render_audio_monitor_rgb
 from checkpoint import default_checkpoint, load_checkpoint, preprocess_camera_frame
-from device_select import prefer_microsoft
+from device_select import match_audio_to_camera, prefer_microsoft
 from jetson_env import apply_jetson_runtime_tweaks, default_device
 from label_hierarchy import apply_logit_bias, combine_hierarchical_probs, format_hierarchy, inference_label
 from live_audio import LiveAudioBuffer, list_audio_input_devices
@@ -230,7 +230,7 @@ class InferenceWorker:
     self.audio_n_mels = int(self.config.get("audio_n_mels", 32))
     self.audio_mel_width = int(self.config.get("audio_mel_width", 32))
     self.audio_buffer = LiveAudioBuffer(sample_rate=self.audio_sample_rate)
-    self.audio_device_index: int | None = None
+    self.audio_device_index: int | str | None = None
     self.audio_input_enabled = True
     self.audio_enabled = bool(self.enable_audio)
 
@@ -300,7 +300,7 @@ class InferenceWorker:
       self.use_radar1 = r1
       self.use_radar2 = r2
 
-  def set_audio_device(self, device_index: int | None, *, input_enabled: bool = True):
+  def set_audio_device(self, device_index: int | str | None, *, input_enabled: bool = True):
     with self.state_lock:
       self.audio_device_index = device_index
       self.audio_input_enabled = bool(input_enabled)
@@ -845,7 +845,7 @@ def _worker_from_args(
   detect_threshold: float,
   human_threshold: float,
   camera_device: int | None = None,
-  audio_device: int | None = None,
+  audio_device: int | str | None = None,
   radar1_uuid: str | None = None,
   radar2_uuid: str | None = None,
 ) -> InferenceWorker:
@@ -943,7 +943,8 @@ class JetsonGuiApp:
     self.radar1_uuid_var = tk.StringVar(value="(auto first)")
     self.radar2_uuid_var = tk.StringVar(value="(auto second)")
     self._camera_index_to_label: dict[str, int] = {}
-    self._audio_index_to_label: dict[str, int] = {}
+    self._audio_open_from_label: dict[str, int | str] = {}
+    self._audio_devices: list[dict] = []
 
     self.camera_photo = None
     self.radar_photo = None
@@ -1027,6 +1028,7 @@ class JetsonGuiApp:
     ttk.Label(devices, text="Camera").grid(row=1, column=0, sticky="w", padx=6, pady=3)
     self.camera_combo = ttk.Combobox(devices, textvariable=self.camera_device_var, state="readonly", width=36)
     self.camera_combo.grid(row=1, column=1, sticky="ew", padx=6, pady=3)
+    self.camera_combo.bind("<<ComboboxSelected>>", lambda _e: self._on_camera_selected())
 
     ttk.Label(devices, text="Audio input").grid(row=2, column=0, sticky="w", padx=6, pady=3)
     self.audio_combo = ttk.Combobox(devices, textvariable=self.audio_device_var, state="readonly", width=36)
@@ -1178,7 +1180,7 @@ class JetsonGuiApp:
       return int(label)
     return self._camera_index_to_label.get(label, -1)
 
-  def _audio_index_from_var(self) -> int | None:
+  def _audio_index_from_var(self) -> int | str | None:
     label = self.audio_device_var.get().strip()
     if label in ("(none)", "", "(scanning…)"):
       return None
@@ -1186,7 +1188,20 @@ class JetsonGuiApp:
       return None
     if label.isdigit():
       return int(label)
-    return self._audio_index_to_label.get(label)
+    return self._audio_open_from_label.get(label)
+
+  def _select_audio_matching_camera(self):
+    mic = match_audio_to_camera(self._audio_devices, self.camera_device_var.get())
+    if mic is not None:
+      self.audio_device_var.set(str(mic["label"]))
+    elif self._audio_devices:
+      self.audio_device_var.set(str(self._audio_devices[0]["label"]))
+    else:
+      self.audio_device_var.set("(none)")
+
+  def _on_camera_selected(self):
+    self._select_audio_matching_camera()
+    self._on_audio_selected()
 
   def _on_radar_uuid_selected(self, slot: int):
     raw = (self.radar1_uuid_var if slot == 1 else self.radar2_uuid_var).get().strip()
@@ -1246,22 +1261,27 @@ class JetsonGuiApp:
       self.camera_device_var.set(str(chosen["label"]) if chosen else "(none)")
 
     audio_labels = ["(default)", "(none)"]
-    self._audio_index_to_label = {}
+    self._audio_open_from_label = {}
+    self._audio_devices = list(audio_devices)
     for dev in audio_devices:
       label = str(dev["label"])
       audio_labels.append(label)
-      self._audio_index_to_label[label] = int(dev["index"])
+      open_id = dev.get("open", dev.get("index"))
+      if open_id is not None:
+        self._audio_open_from_label[label] = open_id
     if hasattr(self, "audio_combo"):
       self.audio_combo["values"] = audio_labels
 
     prev_audio = self.audio_device_var.get().strip()
-    if prev_audio not in audio_labels or prev_audio in ("(scanning…)", ""):
-      if self.args.audio_device is not None:
-        match = next((d for d in audio_devices if int(d["index"]) == int(self.args.audio_device)), None)
-        self.audio_device_var.set(str(match["label"]) if match else "(default)")
-      else:
-        mic = prefer_microsoft(audio_devices)
-        self.audio_device_var.set(str(mic["label"]) if mic else "(default)")
+    keep_audio = prev_audio in self._audio_open_from_label
+    if self.args.audio_device is not None and not keep_audio:
+      match = next(
+        (d for d in audio_devices if str(d.get("index")) == str(self.args.audio_device) or str(d.get("open")) == str(self.args.audio_device)),
+        None,
+      )
+      self.audio_device_var.set(str(match["label"]) if match else "(default)")
+    else:
+      self._select_audio_matching_camera()
 
     radar_choices = ["(auto first)", "(auto second)", "(none)", *list(radar_uuids)]
     if hasattr(self, "radar1_combo"):
@@ -1269,7 +1289,7 @@ class JetsonGuiApp:
       self.radar2_combo["values"] = radar_choices
 
     cam_lines = [f"• {c['label']}" for c in cameras] or ["• (no cameras)"]
-    audio_lines = [f"• {d['label']}" for d in audio_devices] or ["• (no mics / install sounddevice)"]
+    audio_lines = [f"• {d['label']}" for d in audio_devices] or ["• (no mics — sounddevice/ffmpeg)"]
     radar_lines = [f"• {u}" for u in radar_uuids] or ["• (no BGT UUIDs)"]
     self.discovered_var.set(
       "Cameras:\n" + "\n".join(cam_lines) + "\n\nAudio:\n" + "\n".join(audio_lines) + "\n\nRadar:\n" + "\n".join(radar_lines)

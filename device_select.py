@@ -33,6 +33,71 @@ def prefer_microsoft_index(items: list[dict[str, Any]], *, index_key: str = "ind
     return None
 
 
+_AUDIO_SKIP_RE = re.compile(
+  r"streaming service proxy|stereo mix|what u hear|wave out|loopback|monitor|output",
+  re.I,
+)
+
+
+def is_usable_mic_label(label: str | None) -> bool:
+  name = str(label or "").strip()
+  if not name:
+    return False
+  return _AUDIO_SKIP_RE.search(name) is None
+
+
+_TOKEN_RE = re.compile(r"[a-z0-9]+")
+_TOKEN_STOP = frozenset(
+  {
+    "camera",
+    "audio",
+    "microphone",
+    "mic",
+    "input",
+    "output",
+    "device",
+    "usb",
+    "default",
+    "none",
+    "array",
+    "stereo",
+    "wasapi",
+    "mme",
+    "directsound",
+    "dsound",
+    "wdmks",
+  }
+)
+
+
+def _name_tokens(label: str | None) -> set[str]:
+  text = re.sub(r"[®™]", "", str(label or "")).lower()
+  return {tok for tok in _TOKEN_RE.findall(text) if tok not in _TOKEN_STOP and len(tok) > 1}
+
+
+def match_audio_to_camera(audio_devices: list[dict[str, Any]], camera_label: str | None) -> dict[str, Any] | None:
+  """Same physical attachment: LifeCam video ↔ LifeCam mic. Ignore DShow proxy endpoints."""
+  usable = [dev for dev in audio_devices if is_usable_mic_label(str(dev.get("name") or dev.get("label") or ""))]
+  if not usable:
+    return None
+  cam_tokens = _name_tokens(camera_label) - {"microsoft"}
+  best: dict[str, Any] | None = None
+  best_score = 0
+  cam_ms = is_microsoft_label(camera_label)
+  for dev in usable:
+    name = str(dev.get("name") or dev.get("label") or "")
+    overlap = cam_tokens & (_name_tokens(name) - {"microsoft"})
+    score = len(overlap)
+    if cam_ms and is_microsoft_label(name) and score >= 1:
+      score += 2
+    if score > best_score:
+      best = dev
+      best_score = score
+  if best_score >= 1:
+    return best
+  return None
+
+
 def _run(cmd: list[str], *, timeout: float = 8.0) -> str:
   try:
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False)
@@ -53,11 +118,48 @@ def _dedupe(names: list[str]) -> list[str]:
   return out
 
 
+def ffmpeg_exe() -> str | None:
+  ffmpeg = shutil.which("ffmpeg")
+  if ffmpeg:
+    return ffmpeg
+  try:
+    import imageio_ffmpeg
+
+    return imageio_ffmpeg.get_ffmpeg_exe()
+  except Exception:
+    return None
+
+
+def _ffmpeg_dshow_devices() -> tuple[list[str], list[str]]:
+  ffmpeg = ffmpeg_exe()
+  if ffmpeg is None:
+    return [], []
+  raw = _run([ffmpeg, "-hide_banner", "-list_devices", "true", "-f", "dshow", "-i", "dummy"], timeout=12.0)
+  video: list[str] = []
+  audio: list[str] = []
+  section: str | None = None
+  for line in raw.splitlines():
+    lower = line.lower()
+    if "directshow video devices" in lower:
+      section = "video"
+      continue
+    if "directshow audio devices" in lower:
+      section = "audio"
+      continue
+    if section is None:
+      continue
+    match = re.search(r'"([^"]+)"', line)
+    if not match:
+      continue
+    (video if section == "video" else audio).append(match.group(1))
+  return _dedupe(video), _dedupe(audio)
+
+
 def windows_camera_names() -> list[str]:
   """DirectShow / PnP friendly names, discovery order ≈ OpenCV index order."""
-  names = _ffmpeg_dshow_video_names()
-  if names:
-    return names
+  video, _audio = _ffmpeg_dshow_devices()
+  if video:
+    return video
   ps = (
     "Get-PnpDevice -Class Camera,Image -Status OK -ErrorAction SilentlyContinue | "
     "ForEach-Object { $_.FriendlyName }"
@@ -66,30 +168,39 @@ def windows_camera_names() -> list[str]:
   return _dedupe([ln.strip() for ln in raw.splitlines() if ln.strip()])
 
 
-def _ffmpeg_dshow_video_names() -> list[str]:
-  ffmpeg = shutil.which("ffmpeg")
-  if ffmpeg is None:
-    try:
-      import imageio_ffmpeg
+def windows_audio_names() -> list[str]:
+  """DirectShow capture names (LifeCam mic shows up here even without sounddevice)."""
+  _video, audio = _ffmpeg_dshow_devices()
+  if audio:
+    return audio
+  ps = (
+    "Get-PnpDevice -Status OK -ErrorAction SilentlyContinue | "
+    "Where-Object { $_.FriendlyName -match 'LifeCam|Microphone' "
+    "-and $_.FriendlyName -notmatch 'Streaming Service Proxy|Stereo Mix' } | "
+    "ForEach-Object { $_.FriendlyName }"
+  )
+  raw = _run(["powershell", "-NoProfile", "-Command", ps])
+  return _dedupe([ln.strip() for ln in raw.splitlines() if ln.strip()])
 
-      ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
-    except Exception:
-      return []
-  raw = _run([ffmpeg, "-hide_banner", "-list_devices", "true", "-f", "dshow", "-i", "dummy"], timeout=12.0)
+
+def linux_audio_names() -> list[str]:
   names: list[str] = []
-  in_video = False
-  for line in raw.splitlines():
-    lower = line.lower()
-    if "directshow video devices" in lower:
-      in_video = True
-      continue
-    if "directshow audio devices" in lower:
-      break
-    if not in_video:
-      continue
-    match = re.search(r'"([^"]+)"', line)
-    if match:
-      names.append(match.group(1))
+  arecord = shutil.which("arecord")
+  if arecord:
+    raw = _run([arecord, "-l"])
+    for line in raw.splitlines():
+      m = re.search(r"card\s+(\d+):[^\[]*\[([^\]]+)\]", line, re.I)
+      if m:
+        names.append(m.group(2).strip())
+  if names:
+    return _dedupe(names)
+  pactl = shutil.which("pactl")
+  if pactl:
+    raw = _run([pactl, "list", "short", "sources"])
+    for line in raw.splitlines():
+      parts = line.split("\t")
+      if len(parts) >= 2 and "monitor" not in parts[1].lower():
+        names.append(parts[1].strip())
   return _dedupe(names)
 
 
