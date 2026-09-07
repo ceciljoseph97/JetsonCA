@@ -21,7 +21,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from checkpoint import load_checkpoint, preprocess_camera_frame
+from checkpoint import audio_off_kwargs, default_checkpoint, load_checkpoint, preprocess_camera_frame
 from jetson_env import apply_jetson_runtime_tweaks, default_device
 
 
@@ -43,7 +43,7 @@ def parse_args():
   p.add_argument("--frames", type=int, default=30, help="Frames to capture for stream test")
   p.add_argument("--save-preview", type=Path, default=Path("artifacts/camera_preview.jpg"))
   p.add_argument("--infer", action="store_true", help="Also run camera_only model forwards")
-  p.add_argument("--checkpoint", type=Path, default=Path("artifacts/best_multimodal_crossattention.pt"))
+  p.add_argument("--checkpoint", type=Path, default=default_checkpoint())
   p.add_argument("--device", type=str, default=default_device())
   p.add_argument("--window", type=int, default=30)
   p.add_argument("--infer-runs", type=int, default=10)
@@ -176,6 +176,7 @@ def main():
             camera,
             radar_present=radar_present,
             camera_present=camera_present,
+            **audio_off_kwargs(model, args.device),
           )
           if args.device.startswith("cuda"):
             torch.cuda.synchronize()

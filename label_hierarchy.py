@@ -210,7 +210,7 @@ def inference_label(
   top_p = float(probs[top_idx])
   second_p = float(probs[order[1]]) if len(order) > 1 else 0.0
   if min_margin > 0.0 and (top_p - second_p) < min_margin:
-    return "uncertain", top_p
+    return bg, top_p
   return activity_labels[top_idx], top_p
 
 

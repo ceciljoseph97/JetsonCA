@@ -33,7 +33,7 @@ import torch
 import torch.nn as nn
 
 from jetson_env import apply_jetson_runtime_tweaks, default_device, is_jetson
-from checkpoint import load_checkpoint, preprocess_camera_frame
+from checkpoint import audio_off_kwargs, default_checkpoint, load_checkpoint, preprocess_camera_frame
 
 
 def _live_camera_deps():
@@ -717,14 +717,28 @@ def measure_latency(
     radar2 = radar
   with torch.no_grad():
     for _ in range(warmup):
-      model(radar, camera, radar2=radar2, radar_present=radar_present, camera_present=camera_present)
+      model(
+        radar,
+        camera,
+        radar2=radar2,
+        radar_present=radar_present,
+        camera_present=camera_present,
+        **audio_off_kwargs(model, device),
+      )
     _sync(device)
 
     times_ms: list[float] = []
     for _ in range(runs):
       _sync(device)
       t0 = time.perf_counter()
-      model(radar, camera, radar2=radar2, radar_present=radar_present, camera_present=camera_present)
+      model(
+        radar,
+        camera,
+        radar2=radar2,
+        radar_present=radar_present,
+        camera_present=camera_present,
+        **audio_off_kwargs(model, device),
+      )
       _sync(device)
       times_ms.append((time.perf_counter() - t0) * 1000.0)
 
@@ -790,7 +804,14 @@ def profile_mode(
 
   with FlopCounter(model) as counter:
     with torch.no_grad():
-      model(radar, camera, radar2=radar2, radar_present=radar_present, camera_present=camera_present)
+      model(
+        radar,
+        camera,
+        radar2=radar2,
+        radar_present=radar_present,
+        camera_present=camera_present,
+        **audio_off_kwargs(model, device),
+      )
   compute = counter.summary()
 
   latency = measure_latency(
@@ -891,6 +912,7 @@ def profile_live_mode(
         radar2=radar2_t if radar2_t is not None else radar_t,
         radar_present=radar_present,
         camera_present=camera_present,
+        **audio_off_kwargs(model, device),
       )
 
   def _measure_once(
@@ -1409,7 +1431,7 @@ def parse_args():
     epilog=CLI_EXAMPLES,
     formatter_class=argparse.RawDescriptionHelpFormatter,
   )
-  parser.add_argument("--checkpoint", type=Path, default=Path("artifacts/best_multimodal_crossattention.pt"))
+  parser.add_argument("--checkpoint", type=Path, default=default_checkpoint())
   parser.add_argument("--device", type=str, default=default_device())
   parser.add_argument("--batch-size", type=int, default=1)
   parser.add_argument("--window", type=int, default=30, help="Temporal window length (frames)")

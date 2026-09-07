@@ -19,8 +19,9 @@ Training / full desktop GUI / large datasets stay in `../Crossattention`. This p
 | `jetson_env.py` | Tegra detect + thread/memory tweaks |
 | `realtime_multimodal.py` | Camera stream + checkpoint load |
 | `radar_*.py` / `range_*.py` | BGT radar path (needs Infineon SDK) |
+| `artifacts/walking_bg_audio_v1/best_multimodal_crossattention.pt` | **Default** Crossattention walking vs background + audio + DETECT |
 | `artifacts/best_multimodal_crossattention.pt` | Legacy 3-class edge ckpt (crossing + walks) |
-| `artifacts/best_multimodal_crossattention_detect.pt` | Current Crossattention walk+DETECT ckpt |
+| `artifacts/best_multimodal_crossattention_detect.pt` | Older walk+DETECT ckpt (no audio) |
 
 **Not included:** `train.py`, full Crossattention GUI, `data/`, evaluation notebooks.
 
@@ -33,11 +34,15 @@ Edge runtime matches the lab model contract:
 - GATE = `softmax(detect_logits)[target] ≥ thr` (falls back to human if no detect head in ckpt)
 - `dual_radar_fuse=auto` reads ckpt (`none` preferred for reliability mix; `mean`/`max` early-fuse still supported)
 - Optional `detector_preprocess` CFAR soft-mask when present in ckpt config
-- **Audio:** trained in Crossattention (`--audio`); Jetson GUI wires live mic when the checkpoint has `enable_audio=true` (`sounddevice`). R+C-only ckpts still run; mic combo is disabled.
+- **Audio:** trained in Crossattention (`--audio`); Jetson GUI wires live mic when the checkpoint has `enable_audio=true` (`sounddevice`). Default ckpt is `walking_bg_audio_v1`. R+C-only ckpts still run; mic combo is disabled.
 - Camera pick is **not** hardcoded to index 0: probe live devices, prefer a **Microsoft** name if present, else first live camera. Override in the Testing tab or `--camera-device N`.
+- **Modality dropout (GUI):** Camera / Radar master / Audio checkboxes plus Radar 1 / Radar 2 instance drops, same contract as Crossattention (`present=False` + buffer clear). At least one modality stays on.
 
 ```bash
-# current Crossattention walk+DETECT weights
+# default: walking_bg_audio_v1 (audio + DETECT)
+python3 gui_app.py --device cuda
+
+# older walk+DETECT weights (no audio)
 python3 gui_app.py --checkpoint artifacts/best_multimodal_crossattention_detect.pt --device cuda
 
 # legacy 3-class edge weights (still loads; radar2 weights cloned from radar1)
@@ -106,7 +111,7 @@ python3 benchmark.py --live --device cuda --n-cameras 1 --n-radars 2 \
 
 ## GUI (VNC / local display)
 
-Requires `DISPLAY` (e.g. TightVNC into the Orin desktop). Simplified Crossattention **Testing** + **Realtime** tabs — camera / radar / optional audio panels, device probe, Start/Stop.
+Requires `DISPLAY` (e.g. TightVNC into the Orin desktop). Simplified Crossattention **Testing** + **Realtime** tabs — camera / radar / audio panels, device probe, Start/Stop, modality/instance dropout.
 
 ```bash
 # TightVNC session — confirm display (often :1)
@@ -115,11 +120,11 @@ echo $DISPLAY   # should be :1 or :0
 export LD_LIBRARY_PATH=$CONDA_PREFIX/lib:${LD_LIBRARY_PATH:-}
 cd ~/AIDisco/JetsonCA
 git pull
-pip3 install sounddevice   # live mic; skip if R+C-only ckpt
+pip3 install sounddevice   # live mic for walking_bg_audio_v1
 
 python3 gui_app.py --device cuda
 # Testing tab: Refresh devices → Microsoft cam/mic auto-selected if named
-# Realtime tab: Start
+# Realtime tab: Start — uncheck Camera / Radar / Audio (or Radar 1/2) to drop modalities
 
 # camera-only (no radar SDK)
 python3 gui_app.py --device cuda --no-radar
@@ -141,7 +146,7 @@ conda install -c conda-forge "libstdcxx-ng>=13"
 ## TensorRT path (optional)
 
 ```bash
-python3 export_onnx.py --checkpoint artifacts/best_multimodal_crossattention.pt
+python3 export_onnx.py
 # on Nano with TensorRT:
 # trtexec --onnx=artifacts/multimodal_crossattention.onnx \
 #   --saveEngine=artifacts/model_fp16.engine --fp16

@@ -124,6 +124,7 @@ def in_recognition_range(
 
 
 def _as_rd_hw(radar_tensor) -> np.ndarray:
+  """Fuse RX → (range, doppler). Accepts (C,H,W), (H,W), or (T,C,H,W)."""
   tensor = np.asarray(radar_tensor, dtype=np.float32)
   if hasattr(radar_tensor, "detach"):
     tensor = radar_tensor.detach().cpu().numpy().astype(np.float32)
@@ -137,6 +138,11 @@ def _as_rd_hw(radar_tensor) -> np.ndarray:
 
 
 def radar_motion_stats(radar_tensor, *, zero_width: int = 2) -> dict[str, float]:
+  """
+  Motion / target presence on a processed RD map (H=range, W=doppler).
+  Idle after per-frame min-max is grainy and concentrated at zero-Doppler.
+  Walking has a compact blob off zero-Doppler.
+  """
   rd = _as_rd_hw(radar_tensor)
   if rd.size == 0:
     return {"off_zero_max": 0.0, "peak_to_median": 0.0, "peak": 0.0}
@@ -164,3 +170,13 @@ def has_radar_motion(
   stats = radar_motion_stats(radar_tensor, zero_width=zero_width)
   moving = stats["off_zero_max"] >= float(motion_threshold) and stats["peak_to_median"] >= float(peak_ratio)
   return moving, stats
+
+
+def camera_motion_score(camera_window) -> float:
+  """Mean abs frame-diff on a (T,C,H,W) camera tensor in [-1,1] or [0,1]."""
+  frames = np.asarray(camera_window, dtype=np.float32)
+  if hasattr(camera_window, "detach"):
+    frames = camera_window.detach().cpu().numpy().astype(np.float32)
+  if frames.ndim != 4 or frames.shape[0] < 2:
+    return 0.0
+  return float(np.mean(np.abs(frames[1:] - frames[:-1])))

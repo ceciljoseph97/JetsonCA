@@ -20,14 +20,14 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from checkpoint import load_checkpoint, preprocess_camera_frame
+from checkpoint import audio_off_kwargs, default_checkpoint, load_checkpoint, preprocess_camera_frame
 from jetson_env import apply_jetson_runtime_tweaks, default_device
 from label_hierarchy import inference_label
 
 
 def parse_args():
   p = argparse.ArgumentParser(description="Live camera-only multimodal run (radar unavailable)")
-  p.add_argument("--checkpoint", type=Path, default=Path("artifacts/best_multimodal_crossattention.pt"))
+  p.add_argument("--checkpoint", type=Path, default=default_checkpoint())
   p.add_argument("--device", type=str, default=default_device())
   p.add_argument("--camera-device", type=int, default=0)
   p.add_argument("--camera-width", type=int, default=640)
@@ -104,7 +104,7 @@ def main():
 
       if warmup_left > 0:
         with torch.no_grad():
-          model(radar_t, camera_t, radar2=radar_t, radar_present=radar_present, camera_present=camera_present)
+          model(radar_t, camera_t, radar2=radar_t, radar_present=radar_present, camera_present=camera_present, **audio_off_kwargs(model, args.device))
         _sync(args.device)
         warmup_left -= 1
         continue
@@ -112,7 +112,14 @@ def main():
       _sync(args.device)
       t1 = time.perf_counter()
       with torch.no_grad():
-        out = model(radar_t, camera_t, radar2=radar_t, radar_present=radar_present, camera_present=camera_present)
+        out = model(
+          radar_t,
+          camera_t,
+          radar2=radar_t,
+          radar_present=radar_present,
+          camera_present=camera_present,
+          **audio_off_kwargs(model, args.device),
+        )
       _sync(args.device)
       dt_ms = (time.perf_counter() - t1) * 1000.0
       times_ms.append(dt_ms)
@@ -173,7 +180,14 @@ def main():
         _sync(args.device)
         t1 = time.perf_counter()
         with torch.no_grad():
-          out = model(radar_t, camera_t, radar2=radar_t, radar_present=radar_present, camera_present=camera_present)
+          out = model(
+            radar_t,
+            camera_t,
+            radar2=radar_t,
+            radar_present=radar_present,
+            camera_present=camera_present,
+            **audio_off_kwargs(model, args.device),
+          )
         _sync(args.device)
         dt_ms = (time.perf_counter() - t1) * 1000.0
         n_infer += 1

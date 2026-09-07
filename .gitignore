@@ -6,6 +6,7 @@ __pycache__/
 venv/
 .env
 !artifacts/best_multimodal_crossattention.pt
+!artifacts/walking_bg_audio_v1/best_multimodal_crossattention.pt
 recordings/
 data/
 *.mp4

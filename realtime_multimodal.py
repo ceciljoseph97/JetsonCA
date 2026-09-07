@@ -15,7 +15,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from checkpoint import load_checkpoint, preprocess_camera_frame
+from checkpoint import audio_off_kwargs, default_checkpoint, load_checkpoint, preprocess_camera_frame
 from label_hierarchy import inference_label
 from model import MultiModalCrossAttentionNet
 from preprocessing import do_inference_processing
@@ -512,6 +512,7 @@ class LivePredictionPipeline:
         radar2=radar_tensor,
         radar_present=radar_present,
         camera_present=camera_present,
+        **audio_off_kwargs(self.model, self.device),
       )
       probs = F.softmax(outputs["logits"][0], dim=-1).detach().cpu().numpy()
       detect_prob = 1.0
@@ -595,7 +596,7 @@ class LivePredictionPipeline:
 
 def parse_args():
   parser = argparse.ArgumentParser(description="Realtime multimodal radar+camera walking demo")
-  parser.add_argument("--checkpoint", type=Path, default=Path("artifacts/best_multimodal_crossattention.pt"))
+  parser.add_argument("--checkpoint", type=Path, default=default_checkpoint())
   parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
   parser.add_argument("--num-rx", type=int, default=3)
   parser.add_argument("--radar-profile", choices=("safe", "balanced", "gesture"), default="safe")

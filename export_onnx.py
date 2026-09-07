@@ -9,7 +9,7 @@ from pathlib import Path
 import torch
 
 from jetson_env import default_device
-from checkpoint import load_checkpoint
+from checkpoint import default_checkpoint, load_checkpoint
 
 
 class ActivityForward(torch.nn.Module):
@@ -47,7 +47,7 @@ class ActivityForward(torch.nn.Module):
 
 def parse_args():
   p = argparse.ArgumentParser(description="Export JetsonCA model to ONNX")
-  p.add_argument("--checkpoint", type=Path, default=Path("artifacts/best_multimodal_crossattention.pt"))
+  p.add_argument("--checkpoint", type=Path, default=default_checkpoint())
   p.add_argument("--out", type=Path, default=Path("artifacts/multimodal_crossattention.onnx"))
   p.add_argument("--device", type=str, default="cpu", help="Export usually on CPU; device for loading only")
   p.add_argument("--window", type=int, default=30)

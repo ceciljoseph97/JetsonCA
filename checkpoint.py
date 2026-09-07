@@ -12,6 +12,32 @@ from label_hierarchy import is_background_label
 from model import MultiModalCrossAttentionNet
 
 
+WALKING_BG_AUDIO_V1 = Path("artifacts/walking_bg_audio_v1/best_multimodal_crossattention.pt")
+
+
+def default_checkpoint() -> Path:
+  """Prefer walking_bg_audio_v1 (audio + DETECT); fall back to sibling Crossattention / legacy edge ckpts."""
+  here = Path(__file__).resolve().parent
+  candidates = [
+    here / WALKING_BG_AUDIO_V1,
+    here.parent / "Crossattention" / "artifacts" / "walking_bg_audio_v1" / "best_multimodal_crossattention.pt",
+    Path.cwd() / WALKING_BG_AUDIO_V1,
+    here / "artifacts" / "best_multimodal_crossattention_detect.pt",
+    here / "artifacts" / "best_multimodal_crossattention.pt",
+  ]
+  for path in candidates:
+    if path.exists():
+      return path
+  return here / WALKING_BG_AUDIO_V1
+
+
+def audio_off_kwargs(model, device) -> dict:
+  """Mask audio as absent when the ckpt has an audio branch but no mic is wired."""
+  if not getattr(model, "enable_audio", False):
+    return {}
+  return {"audio_present": torch.zeros(1, dtype=torch.bool, device=device)}
+
+
 def _cfg_int(config: dict, key: str, default: int) -> int:
   value = config.get(key, default)
   return default if value is None else int(value)

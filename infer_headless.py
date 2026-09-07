@@ -13,7 +13,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from checkpoint import load_checkpoint, preprocess_camera_frame
+from checkpoint import audio_off_kwargs, default_checkpoint, load_checkpoint, preprocess_camera_frame
 from jetson_env import apply_jetson_runtime_tweaks, default_device
 from label_hierarchy import combine_hierarchical_probs, inference_label
 from radar_utils import DualRadarSession, fuse_dual_radar_tensors, fuse_radar_streams_for_model
@@ -43,7 +43,7 @@ def _presence_probs(outputs: dict) -> tuple[float, float]:
 
 def parse_args():
   p = argparse.ArgumentParser(description="JetsonCA headless multimodal inference")
-  p.add_argument("--checkpoint", type=Path, default=Path("artifacts/best_multimodal_crossattention.pt"))
+  p.add_argument("--checkpoint", type=Path, default=default_checkpoint())
   p.add_argument("--device", type=str, default=default_device())
   p.add_argument("--camera-device", type=int, default=0)
   p.add_argument("--camera-width", type=int, default=640)
@@ -144,6 +144,7 @@ def main():
         radar2=radar2,
         radar_present=radar_present,
         camera_present=camera_present,
+        **audio_off_kwargs(model, args.device),
       )
       logits = out["activity_logits"] if "activity_logits" in out else out["logits"]
       probs = F.softmax(logits, dim=-1)[0].detach().cpu().numpy()
