@@ -1,5 +1,5 @@
 {
-  "timestamp_utc": "2026-09-07T11:27:12.612463+00:00",
+  "timestamp_utc": "2026-09-07T13:14:35.192865+00:00",
   "benchmark_source": "live",
   "checkpoint": "/home/cj/AIDisco/JetsonCA/artifacts/walking_bg_audio_v1/best_multimodal_crossattention.pt",
   "device": "cuda",
@@ -17,10 +17,12 @@
     "jetson_like": true
   },
   "deployment": {
-    "profile": "cam1_radar2",
+    "profile": "cam1_radar2_audio",
     "n_cameras": 1,
     "n_radars": 2,
-    "note": "Model sees 1 camera stream + 1 fused dual-radar stream (early fuse)."
+    "n_audio": 1,
+    "enable_audio": true,
+    "note": "Live USB cam + dual radar + mic (streams follow --mode)."
   },
   "labels": [
     "walking"
@@ -64,14 +66,14 @@
   "parameters_millions": 2.8815,
   "parameters_by_block": {
     "other": {
-      "parameters": 660938.0,
-      "weight_kb": 2581.7890625,
-      "weight_mb": 2.5212783813476562
+      "parameters": 26500.0,
+      "weight_kb": 103.515625,
+      "weight_mb": 0.1010894775390625
     },
     "conv_radar": {
-      "parameters": 93696.0,
-      "weight_kb": 366.0,
-      "weight_mb": 0.357421875
+      "parameters": 187392.0,
+      "weight_kb": 732.0,
+      "weight_mb": 0.71484375
     },
     "conv_camera": {
       "parameters": 93696.0,
@@ -79,11 +81,21 @@
       "weight_mb": 0.357421875
     },
     "temporal_radar": {
+      "parameters": 396544.0,
+      "weight_kb": 1549.0,
+      "weight_mb": 1.5126953125
+    },
+    "temporal_camera": {
       "parameters": 198272.0,
       "weight_kb": 774.5,
       "weight_mb": 0.75634765625
     },
-    "temporal_camera": {
+    "conv_audio": {
+      "parameters": 93120.0,
+      "weight_kb": 363.75,
+      "weight_mb": 0.355224609375
+    },
+    "temporal_audio": {
       "parameters": 198272.0,
       "weight_kb": 774.5,
       "weight_mb": 0.75634765625
@@ -94,9 +106,9 @@
       "weight_mb": 6.0498046875
     },
     "head": {
-      "parameters": 50691.0,
-      "weight_kb": 198.01171875,
-      "weight_mb": 0.19337081909179688
+      "parameters": 101769.0,
+      "weight_kb": 397.53515625,
+      "weight_mb": 0.3882179260253906
     }
   },
   "weight_memory": {
@@ -105,11 +117,12 @@
     "mb": 10.998920440673828
   },
   "buffer_memory_estimate": {
-    "bytes": 5621760.0,
-    "kb": 5490.0,
-    "mb": 5.361328125,
+    "bytes": 5744640.0,
+    "kb": 5610.0,
+    "mb": 5.478515625,
     "n_cameras": 1.0,
     "n_radars": 2.0,
+    "n_audio": 1.0,
     "note": "input window buffers only (not full activation peak)"
   },
   "key_meanings": {
@@ -117,7 +130,7 @@
     "weight_memory": "Parameter + registered buffer memory footprint of the model in RAM/VRAM.",
     "buffer_memory_estimate": "Approximate input-window buffer footprint for deployment, not peak activations.",
     "operation_specs": "Per-block theoretical operation breakdown for the primary mode.",
-    "profiles": "Per-mode benchmark results; usually contains both, radar_only, and/or camera_only.",
+    "profiles": "Per-mode results: both (cam+radar[+audio]), radar_only, camera_only, and audio_* ablations when the ckpt has audio.",
     "total_macs": "Total multiply-accumulate operations for one forward pass.",
     "total_mops": "Total MACs divided by 1e6. Despite the name, this is a count per inference, not per second.",
     "total_flops": "Total floating-point operations for one forward pass, using FLOPs = 2 * MACs.",
@@ -131,7 +144,7 @@
     "conv_share": "Fraction of total theoretical compute spent in convolution layers.",
     "conv_mmacs": "Millions of MACs spent in convolution layers.",
     "temporal_transformer_mmacs": "Millions of MACs spent in temporal self-attention + feed-forward blocks.",
-    "cross_attention_mmacs": "Millions of MACs spent in radar-camera cross-attention blocks.",
+    "cross_attention_mmacs": "Millions of MACs spent in radar-camera-audio cross-attention blocks.",
     "mmacs_per_inference": "Total millions of MACs for one forward pass.",
     "gflops_per_inference": "Total billions of FLOPs for one forward pass.",
     "kpi.pass": "Boolean pass/fail results against the AI-DISCO deployment thresholds.",
@@ -139,18 +152,18 @@
   },
   "operation_specs": {
     "conv": {
-      "macs": 4102963200,
-      "flops": 8205926400,
-      "mops": 4102.9632,
-      "mmacs": 4102.9632,
-      "mflops": 8205.9264,
-      "gflops": 8.2059264,
-      "ops": 6,
+      "macs": 4704583680,
+      "flops": 9409167360,
+      "mops": 4704.58368,
+      "mmacs": 4704.58368,
+      "mflops": 9409.16736,
+      "gflops": 9.40916736,
+      "ops": 12,
       "macs_by_op": {
-        "conv2d": 4102963200
+        "conv2d": 4704583680
       },
       "mops_by_op": {
-        "conv2d": 4102.9632
+        "conv2d": 4704.58368
       },
       "layers": [
         {
@@ -203,6 +216,75 @@
           "op": "conv2d",
           "block": "conv_radar",
           "name": "radar_encoder.net.8",
+          "in_shape": [
+            30,
+            64,
+            8,
+            8
+          ],
+          "out_shape": [
+            30,
+            128,
+            8,
+            8
+          ],
+          "kernel": [
+            3,
+            3
+          ],
+          "macs": 141557760,
+          "flops": 283115520
+        },
+        {
+          "op": "conv2d",
+          "block": "conv_radar",
+          "name": "radar2_encoder.net.0",
+          "in_shape": [
+            30,
+            3,
+            32,
+            32
+          ],
+          "out_shape": [
+            30,
+            32,
+            32,
+            32
+          ],
+          "kernel": [
+            3,
+            3
+          ],
+          "macs": 26542080,
+          "flops": 53084160
+        },
+        {
+          "op": "conv2d",
+          "block": "conv_radar",
+          "name": "radar2_encoder.net.4",
+          "in_shape": [
+            30,
+            32,
+            16,
+            16
+          ],
+          "out_shape": [
+            30,
+            64,
+            16,
+            16
+          ],
+          "kernel": [
+            3,
+            3
+          ],
+          "macs": 141557760,
+          "flops": 283115520
+        },
+        {
+          "op": "conv2d",
+          "block": "conv_radar",
+          "name": "radar2_encoder.net.8",
           "in_shape": [
             30,
             64,
@@ -290,24 +372,93 @@
           ],
           "macs": 1734082560,
           "flops": 3468165120
+        },
+        {
+          "op": "conv2d",
+          "block": "conv_audio",
+          "name": "audio_encoder.net.0",
+          "in_shape": [
+            30,
+            1,
+            32,
+            32
+          ],
+          "out_shape": [
+            30,
+            32,
+            32,
+            32
+          ],
+          "kernel": [
+            3,
+            3
+          ],
+          "macs": 8847360,
+          "flops": 17694720
+        },
+        {
+          "op": "conv2d",
+          "block": "conv_audio",
+          "name": "audio_encoder.net.4",
+          "in_shape": [
+            30,
+            32,
+            16,
+            16
+          ],
+          "out_shape": [
+            30,
+            64,
+            16,
+            16
+          ],
+          "kernel": [
+            3,
+            3
+          ],
+          "macs": 141557760,
+          "flops": 283115520
+        },
+        {
+          "op": "conv2d",
+          "block": "conv_audio",
+          "name": "audio_encoder.net.8",
+          "in_shape": [
+            30,
+            64,
+            8,
+            8
+          ],
+          "out_shape": [
+            30,
+            128,
+            8,
+            8
+          ],
+          "kernel": [
+            3,
+            3
+          ],
+          "macs": 141557760,
+          "flops": 283115520
         }
       ],
-      "share_of_total": 0.8588269220098486,
-      "description": "Frame CNN encoders (radar_encoder + camera_encoder Conv2d)",
+      "share_of_total": 0.9847573386064409,
+      "description": "Frame CNN encoders (radar + camera + audio Conv2d)",
       "by_stream": {
         "radar": {
-          "macs": 309657600,
-          "flops": 619315200,
-          "mops": 309.6576,
-          "mmacs": 309.6576,
-          "mflops": 619.3152,
-          "gflops": 0.6193152,
-          "ops": 3,
+          "macs": 619315200,
+          "flops": 1238630400,
+          "mops": 619.3152,
+          "mmacs": 619.3152,
+          "mflops": 1238.6304,
+          "gflops": 1.2386304,
+          "ops": 6,
           "macs_by_op": {
-            "conv2d": 309657600
+            "conv2d": 619315200
           },
           "mops_by_op": {
-            "conv2d": 309.6576
+            "conv2d": 619.3152
           },
           "layers": [
             {
@@ -360,6 +511,75 @@
               "op": "conv2d",
               "block": "conv_radar",
               "name": "radar_encoder.net.8",
+              "in_shape": [
+                30,
+                64,
+                8,
+                8
+              ],
+              "out_shape": [
+                30,
+                128,
+                8,
+                8
+              ],
+              "kernel": [
+                3,
+                3
+              ],
+              "macs": 141557760,
+              "flops": 283115520
+            },
+            {
+              "op": "conv2d",
+              "block": "conv_radar",
+              "name": "radar2_encoder.net.0",
+              "in_shape": [
+                30,
+                3,
+                32,
+                32
+              ],
+              "out_shape": [
+                30,
+                32,
+                32,
+                32
+              ],
+              "kernel": [
+                3,
+                3
+              ],
+              "macs": 26542080,
+              "flops": 53084160
+            },
+            {
+              "op": "conv2d",
+              "block": "conv_radar",
+              "name": "radar2_encoder.net.4",
+              "in_shape": [
+                30,
+                32,
+                16,
+                16
+              ],
+              "out_shape": [
+                30,
+                64,
+                16,
+                16
+              ],
+              "kernel": [
+                3,
+                3
+              ],
+              "macs": 141557760,
+              "flops": 283115520
+            },
+            {
+              "op": "conv2d",
+              "block": "conv_radar",
+              "name": "radar2_encoder.net.8",
               "in_shape": [
                 30,
                 64,
@@ -466,24 +686,110 @@
               "flops": 3468165120
             }
           ]
+        },
+        "audio": {
+          "macs": 291962880,
+          "flops": 583925760,
+          "mops": 291.96288,
+          "mmacs": 291.96288,
+          "mflops": 583.92576,
+          "gflops": 0.58392576,
+          "ops": 3,
+          "macs_by_op": {
+            "conv2d": 291962880
+          },
+          "mops_by_op": {
+            "conv2d": 291.96288
+          },
+          "layers": [
+            {
+              "op": "conv2d",
+              "block": "conv_audio",
+              "name": "audio_encoder.net.0",
+              "in_shape": [
+                30,
+                1,
+                32,
+                32
+              ],
+              "out_shape": [
+                30,
+                32,
+                32,
+                32
+              ],
+              "kernel": [
+                3,
+                3
+              ],
+              "macs": 8847360,
+              "flops": 17694720
+            },
+            {
+              "op": "conv2d",
+              "block": "conv_audio",
+              "name": "audio_encoder.net.4",
+              "in_shape": [
+                30,
+                32,
+                16,
+                16
+              ],
+              "out_shape": [
+                30,
+                64,
+                16,
+                16
+              ],
+              "kernel": [
+                3,
+                3
+              ],
+              "macs": 141557760,
+              "flops": 283115520
+            },
+            {
+              "op": "conv2d",
+              "block": "conv_audio",
+              "name": "audio_encoder.net.8",
+              "in_shape": [
+                30,
+                64,
+                8,
+                8
+              ],
+              "out_shape": [
+                30,
+                128,
+                8,
+                8
+              ],
+              "kernel": [
+                3,
+                3
+              ],
+              "macs": 141557760,
+              "flops": 283115520
+            }
+          ]
         }
       }
     },
     "temporal_transformer": {
-      "macs": 12026880,
-      "flops": 24053760,
-      "mops": 12.02688,
-      "mmacs": 12.02688,
-      "mflops": 24.05376,
-      "gflops": 0.02405376,
-      "ops": 6,
+      "macs": 24053760,
+      "flops": 48107520,
+      "mops": 24.05376,
+      "mmacs": 24.05376,
+      "mflops": 48.10752,
+      "gflops": 0.04810752,
+      "ops": 12,
       "macs_by_op": {
-        "multihead_attention": 4162560,
-        "linear": 7864320
+        "multihead_attention": 8325120,
+        "linear": 15728640
       },
       "mops_by_op": {
-        "multihead_attention": 4.16256,
-        "linear": 7.86432
+        "multihead_attention": 8.32512,
+        "linear": 15.72864
       },
       "layers": [
         {
@@ -519,6 +825,52 @@
           "op": "linear",
           "block": "temporal_radar",
           "name": "radar_temporal.net.layers.0.linear2",
+          "in_shape": [
+            1,
+            30,
+            512
+          ],
+          "out_shape": [
+            1,
+            30,
+            128
+          ],
+          "macs": 1966080,
+          "flops": 3932160
+        },
+        {
+          "op": "multihead_attention",
+          "block": "temporal_radar",
+          "name": "radar2_temporal.net.layers.0.self_attn",
+          "in_shape": [
+            1,
+            30,
+            128
+          ],
+          "macs": 2081280,
+          "flops": 4162560
+        },
+        {
+          "op": "linear",
+          "block": "temporal_radar",
+          "name": "radar2_temporal.net.layers.0.linear1",
+          "in_shape": [
+            1,
+            30,
+            128
+          ],
+          "out_shape": [
+            1,
+            30,
+            512
+          ],
+          "macs": 1966080,
+          "flops": 3932160
+        },
+        {
+          "op": "linear",
+          "block": "temporal_radar",
+          "name": "radar2_temporal.net.layers.0.linear2",
           "in_shape": [
             1,
             30,
@@ -577,26 +929,72 @@
           ],
           "macs": 1966080,
           "flops": 3932160
+        },
+        {
+          "op": "multihead_attention",
+          "block": "temporal_audio",
+          "name": "audio_temporal.net.layers.0.self_attn",
+          "in_shape": [
+            1,
+            30,
+            128
+          ],
+          "macs": 2081280,
+          "flops": 4162560
+        },
+        {
+          "op": "linear",
+          "block": "temporal_audio",
+          "name": "audio_temporal.net.layers.0.linear1",
+          "in_shape": [
+            1,
+            30,
+            128
+          ],
+          "out_shape": [
+            1,
+            30,
+            512
+          ],
+          "macs": 1966080,
+          "flops": 3932160
+        },
+        {
+          "op": "linear",
+          "block": "temporal_audio",
+          "name": "audio_temporal.net.layers.0.linear2",
+          "in_shape": [
+            1,
+            30,
+            512
+          ],
+          "out_shape": [
+            1,
+            30,
+            128
+          ],
+          "macs": 1966080,
+          "flops": 3932160
         }
       ],
-      "share_of_total": 0.002517450883249893,
+      "share_of_total": 0.005034901766499786,
       "description": "Per-modality TemporalEncoder (TransformerEncoderLayer: self-attn MHA + FFN linears)",
       "by_stream": {
         "radar": {
-          "macs": 6013440,
-          "flops": 12026880,
-          "mops": 6.01344,
-          "mmacs": 6.01344,
-          "mflops": 12.02688,
-          "gflops": 0.01202688,
-          "ops": 3,
+          "macs": 12026880,
+          "flops": 24053760,
+          "mops": 12.02688,
+          "mmacs": 12.02688,
+          "mflops": 24.05376,
+          "gflops": 0.02405376,
+          "ops": 6,
           "macs_by_op": {
-            "multihead_attention": 2081280,
-            "linear": 3932160
+            "multihead_attention": 4162560,
+            "linear": 7864320
           },
           "mops_by_op": {
-            "multihead_attention": 2.08128,
-            "linear": 3.93216
+            "multihead_attention": 4.16256,
+            "linear": 7.86432
           },
           "layers": [
             {
@@ -632,6 +1030,52 @@
               "op": "linear",
               "block": "temporal_radar",
               "name": "radar_temporal.net.layers.0.linear2",
+              "in_shape": [
+                1,
+                30,
+                512
+              ],
+              "out_shape": [
+                1,
+                30,
+                128
+              ],
+              "macs": 1966080,
+              "flops": 3932160
+            },
+            {
+              "op": "multihead_attention",
+              "block": "temporal_radar",
+              "name": "radar2_temporal.net.layers.0.self_attn",
+              "in_shape": [
+                1,
+                30,
+                128
+              ],
+              "macs": 2081280,
+              "flops": 4162560
+            },
+            {
+              "op": "linear",
+              "block": "temporal_radar",
+              "name": "radar2_temporal.net.layers.0.linear1",
+              "in_shape": [
+                1,
+                30,
+                128
+              ],
+              "out_shape": [
+                1,
+                30,
+                512
+              ],
+              "macs": 1966080,
+              "flops": 3932160
+            },
+            {
+              "op": "linear",
+              "block": "temporal_radar",
+              "name": "radar2_temporal.net.layers.0.linear2",
               "in_shape": [
                 1,
                 30,
@@ -711,10 +1155,75 @@
               "flops": 3932160
             }
           ]
+        },
+        "audio": {
+          "macs": 6013440,
+          "flops": 12026880,
+          "mops": 6.01344,
+          "mmacs": 6.01344,
+          "mflops": 12.02688,
+          "gflops": 0.01202688,
+          "ops": 3,
+          "macs_by_op": {
+            "multihead_attention": 2081280,
+            "linear": 3932160
+          },
+          "mops_by_op": {
+            "multihead_attention": 2.08128,
+            "linear": 3.93216
+          },
+          "layers": [
+            {
+              "op": "multihead_attention",
+              "block": "temporal_audio",
+              "name": "audio_temporal.net.layers.0.self_attn",
+              "in_shape": [
+                1,
+                30,
+                128
+              ],
+              "macs": 2081280,
+              "flops": 4162560
+            },
+            {
+              "op": "linear",
+              "block": "temporal_audio",
+              "name": "audio_temporal.net.layers.0.linear1",
+              "in_shape": [
+                1,
+                30,
+                128
+              ],
+              "out_shape": [
+                1,
+                30,
+                512
+              ],
+              "macs": 1966080,
+              "flops": 3932160
+            },
+            {
+              "op": "linear",
+              "block": "temporal_audio",
+              "name": "audio_temporal.net.layers.0.linear2",
+              "in_shape": [
+                1,
+                30,
+                512
+              ],
+              "out_shape": [
+                1,
+                30,
+                128
+              ],
+              "macs": 1966080,
+              "flops": 3932160
+            }
+          ]
         }
       },
-      "attn_macs": 4162560,
-      "ffn_macs": 7864320
+      "attn_macs": 8325120,
+      "ffn_macs": 15728640
     },
     "cross_attention": {
       "macs": 48568320,
@@ -1083,21 +1592,21 @@
         }
       ],
       "share_of_total": 0.010166257589829069,
-      "description": "CrossAttentionBlock stack (radar\u2194camera MHA + FFN)"
+      "description": "CrossAttentionBlock stack (radar\u2194camera\u2194audio MHA + FFN)"
     },
     "head": {
-      "macs": 147840,
-      "flops": 295680,
-      "mops": 0.14784,
-      "mmacs": 0.14784,
-      "mflops": 0.29568,
-      "gflops": 0.00029568,
-      "ops": 11,
+      "macs": 197760,
+      "flops": 395520,
+      "mops": 0.19776,
+      "mmacs": 0.19776,
+      "mflops": 0.39552,
+      "gflops": 0.00039552,
+      "ops": 17,
       "macs_by_op": {
-        "linear": 147840
+        "linear": 197760
       },
       "mops_by_op": {
-        "linear": 0.14784
+        "linear": 0.19776
       },
       "layers": [
         {
@@ -1238,6 +1747,66 @@
         {
           "op": "linear",
           "block": "head",
+          "name": "coarse_classifier.1",
+          "in_shape": [
+            1,
+            128
+          ],
+          "out_shape": [
+            1,
+            128
+          ],
+          "macs": 16384,
+          "flops": 32768
+        },
+        {
+          "op": "linear",
+          "block": "head",
+          "name": "coarse_classifier.4",
+          "in_shape": [
+            1,
+            128
+          ],
+          "out_shape": [
+            1,
+            2
+          ],
+          "macs": 256,
+          "flops": 512
+        },
+        {
+          "op": "linear",
+          "block": "head",
+          "name": "subaction_classifier.1",
+          "in_shape": [
+            1,
+            128
+          ],
+          "out_shape": [
+            1,
+            128
+          ],
+          "macs": 16384,
+          "flops": 32768
+        },
+        {
+          "op": "linear",
+          "block": "head",
+          "name": "subaction_classifier.4",
+          "in_shape": [
+            1,
+            128
+          ],
+          "out_shape": [
+            1,
+            2
+          ],
+          "macs": 256,
+          "flops": 512
+        },
+        {
+          "op": "linear",
+          "block": "head",
           "name": "human_classifier.1",
           "in_shape": [
             1,
@@ -1264,25 +1833,55 @@
           ],
           "macs": 256,
           "flops": 512
+        },
+        {
+          "op": "linear",
+          "block": "head",
+          "name": "detect_classifier.1",
+          "in_shape": [
+            1,
+            128
+          ],
+          "out_shape": [
+            1,
+            128
+          ],
+          "macs": 16384,
+          "flops": 32768
+        },
+        {
+          "op": "linear",
+          "block": "head",
+          "name": "detect_classifier.4",
+          "in_shape": [
+            1,
+            128
+          ],
+          "out_shape": [
+            1,
+            2
+          ],
+          "macs": 256,
+          "flops": 512
         }
       ],
-      "share_of_total": 3.094567656613055e-05,
+      "share_of_total": 4.1394866055992814e-05,
       "description": "shared_proj + activity/human classifiers"
     },
     "by_block": {
       "conv_radar": {
-        "macs": 309657600,
-        "flops": 619315200,
-        "mops": 309.6576,
-        "mmacs": 309.6576,
-        "mflops": 619.3152,
-        "gflops": 0.6193152,
-        "ops": 3,
+        "macs": 619315200,
+        "flops": 1238630400,
+        "mops": 619.3152,
+        "mmacs": 619.3152,
+        "mflops": 1238.6304,
+        "gflops": 1.2386304,
+        "ops": 6,
         "macs_by_op": {
-          "conv2d": 309657600
+          "conv2d": 619315200
         },
         "mops_by_op": {
-          "conv2d": 309.6576
+          "conv2d": 619.3152
         },
         "layers": [
           {
@@ -1353,31 +1952,10 @@
             ],
             "macs": 141557760,
             "flops": 283115520
-          }
-        ]
-      },
-      "other": {
-        "macs": 613697792,
-        "flops": 1227395584,
-        "mops": 613.697792,
-        "mmacs": 613.697792,
-        "mflops": 1227.395584,
-        "gflops": 1.227395584,
-        "ops": 22,
-        "macs_by_op": {
-          "conv2d": 601620480,
-          "multihead_attention": 4162560,
-          "linear": 7914752
-        },
-        "mops_by_op": {
-          "conv2d": 601.62048,
-          "multihead_attention": 4.16256,
-          "linear": 7.914752
-        },
-        "layers": [
+          },
           {
             "op": "conv2d",
-            "block": "other",
+            "block": "conv_radar",
             "name": "radar2_encoder.net.0",
             "in_shape": [
               30,
@@ -1400,7 +1978,7 @@
           },
           {
             "op": "conv2d",
-            "block": "other",
+            "block": "conv_radar",
             "name": "radar2_encoder.net.4",
             "in_shape": [
               30,
@@ -1423,7 +2001,7 @@
           },
           {
             "op": "conv2d",
-            "block": "other",
+            "block": "conv_radar",
             "name": "radar2_encoder.net.8",
             "in_shape": [
               30,
@@ -1443,317 +2021,6 @@
             ],
             "macs": 141557760,
             "flops": 283115520
-          },
-          {
-            "op": "multihead_attention",
-            "block": "other",
-            "name": "radar2_temporal.net.layers.0.self_attn",
-            "in_shape": [
-              1,
-              30,
-              128
-            ],
-            "macs": 2081280,
-            "flops": 4162560
-          },
-          {
-            "op": "linear",
-            "block": "other",
-            "name": "radar2_temporal.net.layers.0.linear1",
-            "in_shape": [
-              1,
-              30,
-              128
-            ],
-            "out_shape": [
-              1,
-              30,
-              512
-            ],
-            "macs": 1966080,
-            "flops": 3932160
-          },
-          {
-            "op": "linear",
-            "block": "other",
-            "name": "radar2_temporal.net.layers.0.linear2",
-            "in_shape": [
-              1,
-              30,
-              512
-            ],
-            "out_shape": [
-              1,
-              30,
-              128
-            ],
-            "macs": 1966080,
-            "flops": 3932160
-          },
-          {
-            "op": "conv2d",
-            "block": "other",
-            "name": "audio_encoder.net.0",
-            "in_shape": [
-              30,
-              1,
-              32,
-              32
-            ],
-            "out_shape": [
-              30,
-              32,
-              32,
-              32
-            ],
-            "kernel": [
-              3,
-              3
-            ],
-            "macs": 8847360,
-            "flops": 17694720
-          },
-          {
-            "op": "conv2d",
-            "block": "other",
-            "name": "audio_encoder.net.4",
-            "in_shape": [
-              30,
-              32,
-              16,
-              16
-            ],
-            "out_shape": [
-              30,
-              64,
-              16,
-              16
-            ],
-            "kernel": [
-              3,
-              3
-            ],
-            "macs": 141557760,
-            "flops": 283115520
-          },
-          {
-            "op": "conv2d",
-            "block": "other",
-            "name": "audio_encoder.net.8",
-            "in_shape": [
-              30,
-              64,
-              8,
-              8
-            ],
-            "out_shape": [
-              30,
-              128,
-              8,
-              8
-            ],
-            "kernel": [
-              3,
-              3
-            ],
-            "macs": 141557760,
-            "flops": 283115520
-          },
-          {
-            "op": "multihead_attention",
-            "block": "other",
-            "name": "audio_temporal.net.layers.0.self_attn",
-            "in_shape": [
-              1,
-              30,
-              128
-            ],
-            "macs": 2081280,
-            "flops": 4162560
-          },
-          {
-            "op": "linear",
-            "block": "other",
-            "name": "audio_temporal.net.layers.0.linear1",
-            "in_shape": [
-              1,
-              30,
-              128
-            ],
-            "out_shape": [
-              1,
-              30,
-              512
-            ],
-            "macs": 1966080,
-            "flops": 3932160
-          },
-          {
-            "op": "linear",
-            "block": "other",
-            "name": "audio_temporal.net.layers.0.linear2",
-            "in_shape": [
-              1,
-              30,
-              512
-            ],
-            "out_shape": [
-              1,
-              30,
-              128
-            ],
-            "macs": 1966080,
-            "flops": 3932160
-          },
-          {
-            "op": "linear",
-            "block": "other",
-            "name": "radar1_quality.1",
-            "in_shape": [
-              1,
-              128
-            ],
-            "out_shape": [
-              1,
-              1
-            ],
-            "macs": 128,
-            "flops": 256
-          },
-          {
-            "op": "linear",
-            "block": "other",
-            "name": "radar2_quality.1",
-            "in_shape": [
-              1,
-              128
-            ],
-            "out_shape": [
-              1,
-              1
-            ],
-            "macs": 128,
-            "flops": 256
-          },
-          {
-            "op": "linear",
-            "block": "other",
-            "name": "camera_quality.1",
-            "in_shape": [
-              1,
-              128
-            ],
-            "out_shape": [
-              1,
-              1
-            ],
-            "macs": 128,
-            "flops": 256
-          },
-          {
-            "op": "linear",
-            "block": "other",
-            "name": "audio_quality.1",
-            "in_shape": [
-              1,
-              128
-            ],
-            "out_shape": [
-              1,
-              1
-            ],
-            "macs": 128,
-            "flops": 256
-          },
-          {
-            "op": "linear",
-            "block": "other",
-            "name": "coarse_classifier.1",
-            "in_shape": [
-              1,
-              128
-            ],
-            "out_shape": [
-              1,
-              128
-            ],
-            "macs": 16384,
-            "flops": 32768
-          },
-          {
-            "op": "linear",
-            "block": "other",
-            "name": "coarse_classifier.4",
-            "in_shape": [
-              1,
-              128
-            ],
-            "out_shape": [
-              1,
-              2
-            ],
-            "macs": 256,
-            "flops": 512
-          },
-          {
-            "op": "linear",
-            "block": "other",
-            "name": "subaction_classifier.1",
-            "in_shape": [
-              1,
-              128
-            ],
-            "out_shape": [
-              1,
-              128
-            ],
-            "macs": 16384,
-            "flops": 32768
-          },
-          {
-            "op": "linear",
-            "block": "other",
-            "name": "subaction_classifier.4",
-            "in_shape": [
-              1,
-              128
-            ],
-            "out_shape": [
-              1,
-              2
-            ],
-            "macs": 256,
-            "flops": 512
-          },
-          {
-            "op": "linear",
-            "block": "other",
-            "name": "detect_classifier.1",
-            "in_shape": [
-              1,
-              128
-            ],
-            "out_shape": [
-              1,
-              128
-            ],
-            "macs": 16384,
-            "flops": 32768
-          },
-          {
-            "op": "linear",
-            "block": "other",
-            "name": "detect_classifier.4",
-            "in_shape": [
-              1,
-              128
-            ],
-            "out_shape": [
-              1,
-              2
-            ],
-            "macs": 256,
-            "flops": 512
           }
         ]
       },
@@ -1844,20 +2111,20 @@
         ]
       },
       "temporal_radar": {
-        "macs": 6013440,
-        "flops": 12026880,
-        "mops": 6.01344,
-        "mmacs": 6.01344,
-        "mflops": 12.02688,
-        "gflops": 0.01202688,
-        "ops": 3,
+        "macs": 12026880,
+        "flops": 24053760,
+        "mops": 12.02688,
+        "mmacs": 12.02688,
+        "mflops": 24.05376,
+        "gflops": 0.02405376,
+        "ops": 6,
         "macs_by_op": {
-          "multihead_attention": 2081280,
-          "linear": 3932160
+          "multihead_attention": 4162560,
+          "linear": 7864320
         },
         "mops_by_op": {
-          "multihead_attention": 2.08128,
-          "linear": 3.93216
+          "multihead_attention": 4.16256,
+          "linear": 7.86432
         },
         "layers": [
           {
@@ -1893,6 +2160,52 @@
             "op": "linear",
             "block": "temporal_radar",
             "name": "radar_temporal.net.layers.0.linear2",
+            "in_shape": [
+              1,
+              30,
+              512
+            ],
+            "out_shape": [
+              1,
+              30,
+              128
+            ],
+            "macs": 1966080,
+            "flops": 3932160
+          },
+          {
+            "op": "multihead_attention",
+            "block": "temporal_radar",
+            "name": "radar2_temporal.net.layers.0.self_attn",
+            "in_shape": [
+              1,
+              30,
+              128
+            ],
+            "macs": 2081280,
+            "flops": 4162560
+          },
+          {
+            "op": "linear",
+            "block": "temporal_radar",
+            "name": "radar2_temporal.net.layers.0.linear1",
+            "in_shape": [
+              1,
+              30,
+              128
+            ],
+            "out_shape": [
+              1,
+              30,
+              512
+            ],
+            "macs": 1966080,
+            "flops": 3932160
+          },
+          {
+            "op": "linear",
+            "block": "temporal_radar",
+            "name": "radar2_temporal.net.layers.0.linear2",
             "in_shape": [
               1,
               30,
@@ -1974,18 +2287,18 @@
         ]
       },
       "head": {
-        "macs": 147840,
-        "flops": 295680,
-        "mops": 0.14784,
-        "mmacs": 0.14784,
-        "mflops": 0.29568,
-        "gflops": 0.00029568,
-        "ops": 11,
+        "macs": 197760,
+        "flops": 395520,
+        "mops": 0.19776,
+        "mmacs": 0.19776,
+        "mflops": 0.39552,
+        "gflops": 0.00039552,
+        "ops": 17,
         "macs_by_op": {
-          "linear": 147840
+          "linear": 197760
         },
         "mops_by_op": {
-          "linear": 0.14784
+          "linear": 0.19776
         },
         "layers": [
           {
@@ -2126,6 +2439,66 @@
           {
             "op": "linear",
             "block": "head",
+            "name": "coarse_classifier.1",
+            "in_shape": [
+              1,
+              128
+            ],
+            "out_shape": [
+              1,
+              128
+            ],
+            "macs": 16384,
+            "flops": 32768
+          },
+          {
+            "op": "linear",
+            "block": "head",
+            "name": "coarse_classifier.4",
+            "in_shape": [
+              1,
+              128
+            ],
+            "out_shape": [
+              1,
+              2
+            ],
+            "macs": 256,
+            "flops": 512
+          },
+          {
+            "op": "linear",
+            "block": "head",
+            "name": "subaction_classifier.1",
+            "in_shape": [
+              1,
+              128
+            ],
+            "out_shape": [
+              1,
+              128
+            ],
+            "macs": 16384,
+            "flops": 32768
+          },
+          {
+            "op": "linear",
+            "block": "head",
+            "name": "subaction_classifier.4",
+            "in_shape": [
+              1,
+              128
+            ],
+            "out_shape": [
+              1,
+              2
+            ],
+            "macs": 256,
+            "flops": 512
+          },
+          {
+            "op": "linear",
+            "block": "head",
             "name": "human_classifier.1",
             "in_shape": [
               1,
@@ -2152,6 +2525,264 @@
             ],
             "macs": 256,
             "flops": 512
+          },
+          {
+            "op": "linear",
+            "block": "head",
+            "name": "detect_classifier.1",
+            "in_shape": [
+              1,
+              128
+            ],
+            "out_shape": [
+              1,
+              128
+            ],
+            "macs": 16384,
+            "flops": 32768
+          },
+          {
+            "op": "linear",
+            "block": "head",
+            "name": "detect_classifier.4",
+            "in_shape": [
+              1,
+              128
+            ],
+            "out_shape": [
+              1,
+              2
+            ],
+            "macs": 256,
+            "flops": 512
+          }
+        ]
+      },
+      "conv_audio": {
+        "macs": 291962880,
+        "flops": 583925760,
+        "mops": 291.96288,
+        "mmacs": 291.96288,
+        "mflops": 583.92576,
+        "gflops": 0.58392576,
+        "ops": 3,
+        "macs_by_op": {
+          "conv2d": 291962880
+        },
+        "mops_by_op": {
+          "conv2d": 291.96288
+        },
+        "layers": [
+          {
+            "op": "conv2d",
+            "block": "conv_audio",
+            "name": "audio_encoder.net.0",
+            "in_shape": [
+              30,
+              1,
+              32,
+              32
+            ],
+            "out_shape": [
+              30,
+              32,
+              32,
+              32
+            ],
+            "kernel": [
+              3,
+              3
+            ],
+            "macs": 8847360,
+            "flops": 17694720
+          },
+          {
+            "op": "conv2d",
+            "block": "conv_audio",
+            "name": "audio_encoder.net.4",
+            "in_shape": [
+              30,
+              32,
+              16,
+              16
+            ],
+            "out_shape": [
+              30,
+              64,
+              16,
+              16
+            ],
+            "kernel": [
+              3,
+              3
+            ],
+            "macs": 141557760,
+            "flops": 283115520
+          },
+          {
+            "op": "conv2d",
+            "block": "conv_audio",
+            "name": "audio_encoder.net.8",
+            "in_shape": [
+              30,
+              64,
+              8,
+              8
+            ],
+            "out_shape": [
+              30,
+              128,
+              8,
+              8
+            ],
+            "kernel": [
+              3,
+              3
+            ],
+            "macs": 141557760,
+            "flops": 283115520
+          }
+        ]
+      },
+      "temporal_audio": {
+        "macs": 6013440,
+        "flops": 12026880,
+        "mops": 6.01344,
+        "mmacs": 6.01344,
+        "mflops": 12.02688,
+        "gflops": 0.01202688,
+        "ops": 3,
+        "macs_by_op": {
+          "multihead_attention": 2081280,
+          "linear": 3932160
+        },
+        "mops_by_op": {
+          "multihead_attention": 2.08128,
+          "linear": 3.93216
+        },
+        "layers": [
+          {
+            "op": "multihead_attention",
+            "block": "temporal_audio",
+            "name": "audio_temporal.net.layers.0.self_attn",
+            "in_shape": [
+              1,
+              30,
+              128
+            ],
+            "macs": 2081280,
+            "flops": 4162560
+          },
+          {
+            "op": "linear",
+            "block": "temporal_audio",
+            "name": "audio_temporal.net.layers.0.linear1",
+            "in_shape": [
+              1,
+              30,
+              128
+            ],
+            "out_shape": [
+              1,
+              30,
+              512
+            ],
+            "macs": 1966080,
+            "flops": 3932160
+          },
+          {
+            "op": "linear",
+            "block": "temporal_audio",
+            "name": "audio_temporal.net.layers.0.linear2",
+            "in_shape": [
+              1,
+              30,
+              512
+            ],
+            "out_shape": [
+              1,
+              30,
+              128
+            ],
+            "macs": 1966080,
+            "flops": 3932160
+          }
+        ]
+      },
+      "other": {
+        "macs": 512,
+        "flops": 1024,
+        "mops": 0.000512,
+        "mmacs": 0.000512,
+        "mflops": 0.001024,
+        "gflops": 1.024e-06,
+        "ops": 4,
+        "macs_by_op": {
+          "linear": 512
+        },
+        "mops_by_op": {
+          "linear": 0.000512
+        },
+        "layers": [
+          {
+            "op": "linear",
+            "block": "other",
+            "name": "radar1_quality.1",
+            "in_shape": [
+              1,
+              128
+            ],
+            "out_shape": [
+              1,
+              1
+            ],
+            "macs": 128,
+            "flops": 256
+          },
+          {
+            "op": "linear",
+            "block": "other",
+            "name": "radar2_quality.1",
+            "in_shape": [
+              1,
+              128
+            ],
+            "out_shape": [
+              1,
+              1
+            ],
+            "macs": 128,
+            "flops": 256
+          },
+          {
+            "op": "linear",
+            "block": "other",
+            "name": "camera_quality.1",
+            "in_shape": [
+              1,
+              128
+            ],
+            "out_shape": [
+              1,
+              1
+            ],
+            "macs": 128,
+            "flops": 256
+          },
+          {
+            "op": "linear",
+            "block": "other",
+            "name": "audio_quality.1",
+            "in_shape": [
+              1,
+              128
+            ],
+            "out_shape": [
+              1,
+              1
+            ],
+            "macs": 128,
+            "flops": 256
           }
         ]
       },
@@ -2535,38 +3166,38 @@
     "enabled": true,
     "sample_interval_ms": 500.0,
     "process_cpu_percent": {
-      "count": 31.0,
-      "mean": 56.19677419354838,
-      "max": 116.8
+      "count": 44.0,
+      "mean": 52.43181818181818,
+      "max": 111.0
     },
     "process_rss_mb": {
-      "count": 31.0,
-      "mean": 1028.1035786290322,
-      "max": 1348.82421875
+      "count": 44.0,
+      "mean": 1450.9825994318182,
+      "max": 1455.203125
     },
     "system_cpu_avg_percent": {
-      "count": 31.0,
-      "mean": 21.867741935483874,
-      "max": 30.416666666666668
+      "count": 44.0,
+      "mean": 22.220454545454547,
+      "max": 32.53333333333334
     },
     "system_cpu_peak_percent": {
-      "count": 31.0,
-      "mean": 44.248387096774195,
-      "max": 91.8
+      "count": 44.0,
+      "mean": 41.24090909090909,
+      "max": 80.8
     },
     "system_ram_used_mb": {
-      "count": 31.0,
-      "mean": 2713.1136592741937,
-      "max": 2951.61328125
+      "count": 44.0,
+      "mean": 3103.871892755682,
+      "max": 3115.90234375
     },
     "tegrastats_gr3d_util_percent": {
-      "count": 31.0,
-      "mean": 22.93548387096774,
+      "count": 43.0,
+      "mean": 17.232558139534884,
       "max": 99.0
     },
     "tegrastats_emc_util_percent": null,
-    "psutil_samples": 31.0,
-    "tegrastats_samples": 31.0
+    "psutil_samples": 44.0,
+    "tegrastats_samples": 43.0
   },
   "notes": [
     "FLOPs = 2 * MACs (mul-add counted as 2).",
@@ -2574,10 +3205,10 @@
     "MFLOPs = FLOPs / 1e6.",
     "achieved_mops_per_s = theoretical MACs / measured mean latency.",
     "AI-DISCO KPI targets for Jetson Nano\u2013class cam1+radar2 deployment.",
-    "operation_specs.conv = radar+camera ConvFrameEncoder Conv2d cost.",
-    "operation_specs.temporal_transformer = radar/camera TemporalEncoder (TransformerEncoderLayer self-attn + FFN).",
+    "operation_specs.conv includes radar, camera, and audio ConvFrameEncoder when present.",
+    "operation_specs.temporal_transformer includes per-modality TemporalEncoder (TransformerEncoderLayer self-attn + FFN).",
     "Linear layers nested under MultiheadAttention are not double-counted.",
-    "Current forward always runs radar+camera encoders; modality flags zero tokens after encode (so radar_only/camera_only theoretical MACs match both until early-skip is added)."
+    "both = camera + dual radar + audio (if ckpt enable_audio). Ablations set modality_present=False (encoders still run until early-skip exists)."
   ],
   "profiles": [
     {
@@ -2600,13 +3231,17 @@
           112
         ],
         "radar_present": true,
-        "camera_present": true
+        "camera_present": true,
+        "audio_present": true,
+        "enable_audio": true,
+        "audio_source": "live_mic"
       },
       "live_capture": {
         "camera_device": 0,
         "camera_width": 640,
         "camera_height": 480,
         "camera_fps": 15.0,
+        "audio_device": "alsa_input.usb-Microsoft_Microsoft___LifeCam_HD-5000-02.mono-fallback",
         "num_rx": 3,
         "radar_profile": "safe",
         "frame_rate_hz": 5.0,
@@ -2621,63 +3256,73 @@
           "radar2_mirrored": false,
           "fusion": "dual_none",
           "degraded": false,
-          "status_text": "radar1=ok/live radar2=ok/live",
-          "camera_only": false
+          "status_text": "radar1=ok/live radar2=ok/live"
         },
         "timing": {
           "radar_capture_ms": {
-            "count": 69.0,
-            "mean_ms": 132.24239194199112,
-            "std_ms": 56.35959596910442,
-            "min_ms": 8.253789999798755,
-            "max_ms": 194.00334100100736,
-            "p50_ms": 117.49792099908518,
-            "p95_ms": 191.6871765995893,
-            "p99_ms": 192.81057476095157
+            "count": 98.0,
+            "mean_ms": 135.77002070417862,
+            "std_ms": 70.511861698306,
+            "min_ms": 8.505537000019103,
+            "max_ms": 202.65471799939405,
+            "p50_ms": 186.5987179990043,
+            "p95_ms": 201.3711265002712,
+            "p99_ms": 202.32132900157012
           },
           "radar_fuse_ms": {
-            "count": 69.0,
-            "mean_ms": 0.02033837689310346,
-            "std_ms": 0.005106742642901038,
-            "min_ms": 0.01312300082645379,
-            "max_ms": 0.03965799987781793,
-            "p50_ms": 0.019973000235040672,
-            "p95_ms": 0.02619480073917657,
-            "p99_ms": 0.031909400495351216
+            "count": 98.0,
+            "mean_ms": 0.020661632723723806,
+            "std_ms": 0.006095944330540944,
+            "min_ms": 0.012602002243511379,
+            "max_ms": 0.05609999789157882,
+            "p50_ms": 0.020612998923752457,
+            "p95_ms": 0.028230798670847428,
+            "p99_ms": 0.03627514022809921
           },
           "camera_fetch_preprocess_ms": {
             "count": 69.0,
-            "mean_ms": 10.753843608746546,
-            "std_ms": 2.65474265097595,
-            "min_ms": 5.549384999540052,
-            "max_ms": 19.278904001112096,
-            "p50_ms": 10.519622001083917,
-            "p95_ms": 14.672607599277399,
-            "p99_ms": 16.52205615937416
+            "mean_ms": 8.070935739311423,
+            "std_ms": 1.8539801185070957,
+            "min_ms": 5.058205999375787,
+            "max_ms": 12.341921999905026,
+            "p50_ms": 8.043943998927716,
+            "p95_ms": 11.608299199724566,
+            "p99_ms": 12.16040347891976
+          },
+          "audio_mel_ms": {
+            "count": 40.0,
+            "mean_ms": 35.72610649962371,
+            "std_ms": 4.821605188102589,
+            "min_ms": 25.31741500206408,
+            "max_ms": 46.48755999733112,
+            "p50_ms": 36.58605000055104,
+            "p95_ms": 43.96018514780735,
+            "p99_ms": 45.73651515813253
           },
           "inference_ms": {
             "count": 30.0,
-            "mean_ms": 73.6775672998192,
-            "std_ms": 6.680714677640074,
-            "min_ms": 61.58974699974351,
-            "max_ms": 86.29922999898554,
-            "p50_ms": 72.6464945000771,
-            "p95_ms": 83.19263995017536,
-            "p99_ms": 85.59041605936727
+            "mean_ms": 95.26609670004594,
+            "std_ms": 8.536841386577484,
+            "min_ms": 80.18321599956835,
+            "max_ms": 110.21462499775225,
+            "p50_ms": 94.88104800038855,
+            "p95_ms": 108.65107299887313,
+            "p99_ms": 109.96764069775963
           },
           "total_loop_ms": {
             "count": 30.0,
-            "mean_ms": 200.97060293325436,
-            "std_ms": 7.616017864616119,
-            "min_ms": 184.89167299958353,
-            "max_ms": 217.2089869982301,
-            "p50_ms": 202.29903850031405,
-            "p95_ms": 212.103272549939,
-            "p99_ms": 215.73247200889455
+            "mean_ms": 199.7420671999862,
+            "std_ms": 18.1002069515254,
+            "min_ms": 167.22214000037638,
+            "max_ms": 233.32247999860556,
+            "p50_ms": 198.56258900108514,
+            "p95_ms": 226.2339796527158,
+            "p99_ms": 231.30546938995394
           }
         },
         "notes": [
-          "total_loop_ms includes live sensor polling, radar fusion, camera fetch/preprocess, and model inference.",
+          "Live sensors: USB cam / dual radar / mic as required by --mode.",
+          "both = cam + radar + mic when the checkpoint has enable_audio.",
           "latency.* remains model-forward latency only so KPI thresholds stay comparable."
         ]
       },
@@ -2773,7 +3418,7 @@
           },
           {
             "op": "conv2d",
-            "block": "other",
+            "block": "conv_radar",
             "name": "radar2_encoder.net.0",
             "in_shape": [
               30,
@@ -2796,7 +3441,7 @@
           },
           {
             "op": "conv2d",
-            "block": "other",
+            "block": "conv_radar",
             "name": "radar2_encoder.net.4",
             "in_shape": [
               30,
@@ -2819,7 +3464,7 @@
           },
           {
             "op": "conv2d",
-            "block": "other",
+            "block": "conv_radar",
             "name": "radar2_encoder.net.8",
             "in_shape": [
               30,
@@ -2911,7 +3556,7 @@
           },
           {
             "op": "conv2d",
-            "block": "other",
+            "block": "conv_audio",
             "name": "audio_encoder.net.0",
             "in_shape": [
               30,
@@ -2934,7 +3579,7 @@
           },
           {
             "op": "conv2d",
-            "block": "other",
+            "block": "conv_audio",
             "name": "audio_encoder.net.4",
             "in_shape": [
               30,
@@ -2957,7 +3602,7 @@
           },
           {
             "op": "conv2d",
-            "block": "other",
+            "block": "conv_audio",
             "name": "audio_encoder.net.8",
             "in_shape": [
               30,
@@ -2984,18 +3629,18 @@
         "conv2d_flops": 9409167360,
         "operation_specs": {
           "conv": {
-            "macs": 4102963200,
-            "flops": 8205926400,
-            "mops": 4102.9632,
-            "mmacs": 4102.9632,
-            "mflops": 8205.9264,
-            "gflops": 8.2059264,
-            "ops": 6,
+            "macs": 4704583680,
+            "flops": 9409167360,
+            "mops": 4704.58368,
+            "mmacs": 4704.58368,
+            "mflops": 9409.16736,
+            "gflops": 9.40916736,
+            "ops": 12,
             "macs_by_op": {
-              "conv2d": 4102963200
+              "conv2d": 4704583680
             },
             "mops_by_op": {
-              "conv2d": 4102.9632
+              "conv2d": 4704.58368
             },
             "layers": [
               {
@@ -3048,6 +3693,75 @@
                 "op": "conv2d",
                 "block": "conv_radar",
                 "name": "radar_encoder.net.8",
+                "in_shape": [
+                  30,
+                  64,
+                  8,
+                  8
+                ],
+                "out_shape": [
+                  30,
+                  128,
+                  8,
+                  8
+                ],
+                "kernel": [
+                  3,
+                  3
+                ],
+                "macs": 141557760,
+                "flops": 283115520
+              },
+              {
+                "op": "conv2d",
+                "block": "conv_radar",
+                "name": "radar2_encoder.net.0",
+                "in_shape": [
+                  30,
+                  3,
+                  32,
+                  32
+                ],
+                "out_shape": [
+                  30,
+                  32,
+                  32,
+                  32
+                ],
+                "kernel": [
+                  3,
+                  3
+                ],
+                "macs": 26542080,
+                "flops": 53084160
+              },
+              {
+                "op": "conv2d",
+                "block": "conv_radar",
+                "name": "radar2_encoder.net.4",
+                "in_shape": [
+                  30,
+                  32,
+                  16,
+                  16
+                ],
+                "out_shape": [
+                  30,
+                  64,
+                  16,
+                  16
+                ],
+                "kernel": [
+                  3,
+                  3
+                ],
+                "macs": 141557760,
+                "flops": 283115520
+              },
+              {
+                "op": "conv2d",
+                "block": "conv_radar",
+                "name": "radar2_encoder.net.8",
                 "in_shape": [
                   30,
                   64,
@@ -3135,24 +3849,93 @@
                 ],
                 "macs": 1734082560,
                 "flops": 3468165120
+              },
+              {
+                "op": "conv2d",
+                "block": "conv_audio",
+                "name": "audio_encoder.net.0",
+                "in_shape": [
+                  30,
+                  1,
+                  32,
+                  32
+                ],
+                "out_shape": [
+                  30,
+                  32,
+                  32,
+                  32
+                ],
+                "kernel": [
+                  3,
+                  3
+                ],
+                "macs": 8847360,
+                "flops": 17694720
+              },
+              {
+                "op": "conv2d",
+                "block": "conv_audio",
+                "name": "audio_encoder.net.4",
+                "in_shape": [
+                  30,
+                  32,
+                  16,
+                  16
+                ],
+                "out_shape": [
+                  30,
+                  64,
+                  16,
+                  16
+                ],
+                "kernel": [
+                  3,
+                  3
+                ],
+                "macs": 141557760,
+                "flops": 283115520
+              },
+              {
+                "op": "conv2d",
+                "block": "conv_audio",
+                "name": "audio_encoder.net.8",
+                "in_shape": [
+                  30,
+                  64,
+                  8,
+                  8
+                ],
+                "out_shape": [
+                  30,
+                  128,
+                  8,
+                  8
+                ],
+                "kernel": [
+                  3,
+                  3
+                ],
+                "macs": 141557760,
+                "flops": 283115520
               }
             ],
-            "share_of_total": 0.8588269220098486,
-            "description": "Frame CNN encoders (radar_encoder + camera_encoder Conv2d)",
+            "share_of_total": 0.9847573386064409,
+            "description": "Frame CNN encoders (radar + camera + audio Conv2d)",
             "by_stream": {
               "radar": {
-                "macs": 309657600,
-                "flops": 619315200,
-                "mops": 309.6576,
-                "mmacs": 309.6576,
-                "mflops": 619.3152,
-                "gflops": 0.6193152,
-                "ops": 3,
+                "macs": 619315200,
+                "flops": 1238630400,
+                "mops": 619.3152,
+                "mmacs": 619.3152,
+                "mflops": 1238.6304,
+                "gflops": 1.2386304,
+                "ops": 6,
                 "macs_by_op": {
-                  "conv2d": 309657600
+                  "conv2d": 619315200
                 },
                 "mops_by_op": {
-                  "conv2d": 309.6576
+                  "conv2d": 619.3152
                 },
                 "layers": [
                   {
@@ -3205,6 +3988,75 @@
                     "op": "conv2d",
                     "block": "conv_radar",
                     "name": "radar_encoder.net.8",
+                    "in_shape": [
+                      30,
+                      64,
+                      8,
+                      8
+                    ],
+                    "out_shape": [
+                      30,
+                      128,
+                      8,
+                      8
+                    ],
+                    "kernel": [
+                      3,
+                      3
+                    ],
+                    "macs": 141557760,
+                    "flops": 283115520
+                  },
+                  {
+                    "op": "conv2d",
+                    "block": "conv_radar",
+                    "name": "radar2_encoder.net.0",
+                    "in_shape": [
+                      30,
+                      3,
+                      32,
+                      32
+                    ],
+                    "out_shape": [
+                      30,
+                      32,
+                      32,
+                      32
+                    ],
+                    "kernel": [
+                      3,
+                      3
+                    ],
+                    "macs": 26542080,
+                    "flops": 53084160
+                  },
+                  {
+                    "op": "conv2d",
+                    "block": "conv_radar",
+                    "name": "radar2_encoder.net.4",
+                    "in_shape": [
+                      30,
+                      32,
+                      16,
+                      16
+                    ],
+                    "out_shape": [
+                      30,
+                      64,
+                      16,
+                      16
+                    ],
+                    "kernel": [
+                      3,
+                      3
+                    ],
+                    "macs": 141557760,
+                    "flops": 283115520
+                  },
+                  {
+                    "op": "conv2d",
+                    "block": "conv_radar",
+                    "name": "radar2_encoder.net.8",
                     "in_shape": [
                       30,
                       64,
@@ -3311,24 +4163,110 @@
                     "flops": 3468165120
                   }
                 ]
+              },
+              "audio": {
+                "macs": 291962880,
+                "flops": 583925760,
+                "mops": 291.96288,
+                "mmacs": 291.96288,
+                "mflops": 583.92576,
+                "gflops": 0.58392576,
+                "ops": 3,
+                "macs_by_op": {
+                  "conv2d": 291962880
+                },
+                "mops_by_op": {
+                  "conv2d": 291.96288
+                },
+                "layers": [
+                  {
+                    "op": "conv2d",
+                    "block": "conv_audio",
+                    "name": "audio_encoder.net.0",
+                    "in_shape": [
+                      30,
+                      1,
+                      32,
+                      32
+                    ],
+                    "out_shape": [
+                      30,
+                      32,
+                      32,
+                      32
+                    ],
+                    "kernel": [
+                      3,
+                      3
+                    ],
+                    "macs": 8847360,
+                    "flops": 17694720
+                  },
+                  {
+                    "op": "conv2d",
+                    "block": "conv_audio",
+                    "name": "audio_encoder.net.4",
+                    "in_shape": [
+                      30,
+                      32,
+                      16,
+                      16
+                    ],
+                    "out_shape": [
+                      30,
+                      64,
+                      16,
+                      16
+                    ],
+                    "kernel": [
+                      3,
+                      3
+                    ],
+                    "macs": 141557760,
+                    "flops": 283115520
+                  },
+                  {
+                    "op": "conv2d",
+                    "block": "conv_audio",
+                    "name": "audio_encoder.net.8",
+                    "in_shape": [
+                      30,
+                      64,
+                      8,
+                      8
+                    ],
+                    "out_shape": [
+                      30,
+                      128,
+                      8,
+                      8
+                    ],
+                    "kernel": [
+                      3,
+                      3
+                    ],
+                    "macs": 141557760,
+                    "flops": 283115520
+                  }
+                ]
               }
             }
           },
           "temporal_transformer": {
-            "macs": 12026880,
-            "flops": 24053760,
-            "mops": 12.02688,
-            "mmacs": 12.02688,
-            "mflops": 24.05376,
-            "gflops": 0.02405376,
-            "ops": 6,
+            "macs": 24053760,
+            "flops": 48107520,
+            "mops": 24.05376,
+            "mmacs": 24.05376,
+            "mflops": 48.10752,
+            "gflops": 0.04810752,
+            "ops": 12,
             "macs_by_op": {
-              "multihead_attention": 4162560,
-              "linear": 7864320
+              "multihead_attention": 8325120,
+              "linear": 15728640
             },
             "mops_by_op": {
-              "multihead_attention": 4.16256,
-              "linear": 7.86432
+              "multihead_attention": 8.32512,
+              "linear": 15.72864
             },
             "layers": [
               {
@@ -3364,6 +4302,52 @@
                 "op": "linear",
                 "block": "temporal_radar",
                 "name": "radar_temporal.net.layers.0.linear2",
+                "in_shape": [
+                  1,
+                  30,
+                  512
+                ],
+                "out_shape": [
+                  1,
+                  30,
+                  128
+                ],
+                "macs": 1966080,
+                "flops": 3932160
+              },
+              {
+                "op": "multihead_attention",
+                "block": "temporal_radar",
+                "name": "radar2_temporal.net.layers.0.self_attn",
+                "in_shape": [
+                  1,
+                  30,
+                  128
+                ],
+                "macs": 2081280,
+                "flops": 4162560
+              },
+              {
+                "op": "linear",
+                "block": "temporal_radar",
+                "name": "radar2_temporal.net.layers.0.linear1",
+                "in_shape": [
+                  1,
+                  30,
+                  128
+                ],
+                "out_shape": [
+                  1,
+                  30,
+                  512
+                ],
+                "macs": 1966080,
+                "flops": 3932160
+              },
+              {
+                "op": "linear",
+                "block": "temporal_radar",
+                "name": "radar2_temporal.net.layers.0.linear2",
                 "in_shape": [
                   1,
                   30,
@@ -3422,26 +4406,72 @@
                 ],
                 "macs": 1966080,
                 "flops": 3932160
+              },
+              {
+                "op": "multihead_attention",
+                "block": "temporal_audio",
+                "name": "audio_temporal.net.layers.0.self_attn",
+                "in_shape": [
+                  1,
+                  30,
+                  128
+                ],
+                "macs": 2081280,
+                "flops": 4162560
+              },
+              {
+                "op": "linear",
+                "block": "temporal_audio",
+                "name": "audio_temporal.net.layers.0.linear1",
+                "in_shape": [
+                  1,
+                  30,
+                  128
+                ],
+                "out_shape": [
+                  1,
+                  30,
+                  512
+                ],
+                "macs": 1966080,
+                "flops": 3932160
+              },
+              {
+                "op": "linear",
+                "block": "temporal_audio",
+                "name": "audio_temporal.net.layers.0.linear2",
+                "in_shape": [
+                  1,
+                  30,
+                  512
+                ],
+                "out_shape": [
+                  1,
+                  30,
+                  128
+                ],
+                "macs": 1966080,
+                "flops": 3932160
               }
             ],
-            "share_of_total": 0.002517450883249893,
+            "share_of_total": 0.005034901766499786,
             "description": "Per-modality TemporalEncoder (TransformerEncoderLayer: self-attn MHA + FFN linears)",
             "by_stream": {
               "radar": {
-                "macs": 6013440,
-                "flops": 12026880,
-                "mops": 6.01344,
-                "mmacs": 6.01344,
-                "mflops": 12.02688,
-                "gflops": 0.01202688,
-                "ops": 3,
+                "macs": 12026880,
+                "flops": 24053760,
+                "mops": 12.02688,
+                "mmacs": 12.02688,
+                "mflops": 24.05376,
+                "gflops": 0.02405376,
+                "ops": 6,
                 "macs_by_op": {
-                  "multihead_attention": 2081280,
-                  "linear": 3932160
+                  "multihead_attention": 4162560,
+                  "linear": 7864320
                 },
                 "mops_by_op": {
-                  "multihead_attention": 2.08128,
-                  "linear": 3.93216
+                  "multihead_attention": 4.16256,
+                  "linear": 7.86432
                 },
                 "layers": [
                   {
@@ -3477,6 +4507,52 @@
                     "op": "linear",
                     "block": "temporal_radar",
                     "name": "radar_temporal.net.layers.0.linear2",
+                    "in_shape": [
+                      1,
+                      30,
+                      512
+                    ],
+                    "out_shape": [
+                      1,
+                      30,
+                      128
+                    ],
+                    "macs": 1966080,
+                    "flops": 3932160
+                  },
+                  {
+                    "op": "multihead_attention",
+                    "block": "temporal_radar",
+                    "name": "radar2_temporal.net.layers.0.self_attn",
+                    "in_shape": [
+                      1,
+                      30,
+                      128
+                    ],
+                    "macs": 2081280,
+                    "flops": 4162560
+                  },
+                  {
+                    "op": "linear",
+                    "block": "temporal_radar",
+                    "name": "radar2_temporal.net.layers.0.linear1",
+                    "in_shape": [
+                      1,
+                      30,
+                      128
+                    ],
+                    "out_shape": [
+                      1,
+                      30,
+                      512
+                    ],
+                    "macs": 1966080,
+                    "flops": 3932160
+                  },
+                  {
+                    "op": "linear",
+                    "block": "temporal_radar",
+                    "name": "radar2_temporal.net.layers.0.linear2",
                     "in_shape": [
                       1,
                       30,
@@ -3556,10 +4632,75 @@
                     "flops": 3932160
                   }
                 ]
+              },
+              "audio": {
+                "macs": 6013440,
+                "flops": 12026880,
+                "mops": 6.01344,
+                "mmacs": 6.01344,
+                "mflops": 12.02688,
+                "gflops": 0.01202688,
+                "ops": 3,
+                "macs_by_op": {
+                  "multihead_attention": 2081280,
+                  "linear": 3932160
+                },
+                "mops_by_op": {
+                  "multihead_attention": 2.08128,
+                  "linear": 3.93216
+                },
+                "layers": [
+                  {
+                    "op": "multihead_attention",
+                    "block": "temporal_audio",
+                    "name": "audio_temporal.net.layers.0.self_attn",
+                    "in_shape": [
+                      1,
+                      30,
+                      128
+                    ],
+                    "macs": 2081280,
+                    "flops": 4162560
+                  },
+                  {
+                    "op": "linear",
+                    "block": "temporal_audio",
+                    "name": "audio_temporal.net.layers.0.linear1",
+                    "in_shape": [
+                      1,
+                      30,
+                      128
+                    ],
+                    "out_shape": [
+                      1,
+                      30,
+                      512
+                    ],
+                    "macs": 1966080,
+                    "flops": 3932160
+                  },
+                  {
+                    "op": "linear",
+                    "block": "temporal_audio",
+                    "name": "audio_temporal.net.layers.0.linear2",
+                    "in_shape": [
+                      1,
+                      30,
+                      512
+                    ],
+                    "out_shape": [
+                      1,
+                      30,
+                      128
+                    ],
+                    "macs": 1966080,
+                    "flops": 3932160
+                  }
+                ]
               }
             },
-            "attn_macs": 4162560,
-            "ffn_macs": 7864320
+            "attn_macs": 8325120,
+            "ffn_macs": 15728640
           },
           "cross_attention": {
             "macs": 48568320,
@@ -3928,21 +5069,21 @@
               }
             ],
             "share_of_total": 0.010166257589829069,
-            "description": "CrossAttentionBlock stack (radar\u2194camera MHA + FFN)"
+            "description": "CrossAttentionBlock stack (radar\u2194camera\u2194audio MHA + FFN)"
           },
           "head": {
-            "macs": 147840,
-            "flops": 295680,
-            "mops": 0.14784,
-            "mmacs": 0.14784,
-            "mflops": 0.29568,
-            "gflops": 0.00029568,
-            "ops": 11,
+            "macs": 197760,
+            "flops": 395520,
+            "mops": 0.19776,
+            "mmacs": 0.19776,
+            "mflops": 0.39552,
+            "gflops": 0.00039552,
+            "ops": 17,
             "macs_by_op": {
-              "linear": 147840
+              "linear": 197760
             },
             "mops_by_op": {
-              "linear": 0.14784
+              "linear": 0.19776
             },
             "layers": [
               {
@@ -4083,6 +5224,66 @@
               {
                 "op": "linear",
                 "block": "head",
+                "name": "coarse_classifier.1",
+                "in_shape": [
+                  1,
+                  128
+                ],
+                "out_shape": [
+                  1,
+                  128
+                ],
+                "macs": 16384,
+                "flops": 32768
+              },
+              {
+                "op": "linear",
+                "block": "head",
+                "name": "coarse_classifier.4",
+                "in_shape": [
+                  1,
+                  128
+                ],
+                "out_shape": [
+                  1,
+                  2
+                ],
+                "macs": 256,
+                "flops": 512
+              },
+              {
+                "op": "linear",
+                "block": "head",
+                "name": "subaction_classifier.1",
+                "in_shape": [
+                  1,
+                  128
+                ],
+                "out_shape": [
+                  1,
+                  128
+                ],
+                "macs": 16384,
+                "flops": 32768
+              },
+              {
+                "op": "linear",
+                "block": "head",
+                "name": "subaction_classifier.4",
+                "in_shape": [
+                  1,
+                  128
+                ],
+                "out_shape": [
+                  1,
+                  2
+                ],
+                "macs": 256,
+                "flops": 512
+              },
+              {
+                "op": "linear",
+                "block": "head",
                 "name": "human_classifier.1",
                 "in_shape": [
                   1,
@@ -4109,25 +5310,55 @@
                 ],
                 "macs": 256,
                 "flops": 512
+              },
+              {
+                "op": "linear",
+                "block": "head",
+                "name": "detect_classifier.1",
+                "in_shape": [
+                  1,
+                  128
+                ],
+                "out_shape": [
+                  1,
+                  128
+                ],
+                "macs": 16384,
+                "flops": 32768
+              },
+              {
+                "op": "linear",
+                "block": "head",
+                "name": "detect_classifier.4",
+                "in_shape": [
+                  1,
+                  128
+                ],
+                "out_shape": [
+                  1,
+                  2
+                ],
+                "macs": 256,
+                "flops": 512
               }
             ],
-            "share_of_total": 3.094567656613055e-05,
+            "share_of_total": 4.1394866055992814e-05,
             "description": "shared_proj + activity/human classifiers"
           },
           "by_block": {
             "conv_radar": {
-              "macs": 309657600,
-              "flops": 619315200,
-              "mops": 309.6576,
-              "mmacs": 309.6576,
-              "mflops": 619.3152,
-              "gflops": 0.6193152,
-              "ops": 3,
+              "macs": 619315200,
+              "flops": 1238630400,
+              "mops": 619.3152,
+              "mmacs": 619.3152,
+              "mflops": 1238.6304,
+              "gflops": 1.2386304,
+              "ops": 6,
               "macs_by_op": {
-                "conv2d": 309657600
+                "conv2d": 619315200
               },
               "mops_by_op": {
-                "conv2d": 309.6576
+                "conv2d": 619.3152
               },
               "layers": [
                 {
@@ -4198,31 +5429,10 @@
                   ],
                   "macs": 141557760,
                   "flops": 283115520
-                }
-              ]
-            },
-            "other": {
-              "macs": 613697792,
-              "flops": 1227395584,
-              "mops": 613.697792,
-              "mmacs": 613.697792,
-              "mflops": 1227.395584,
-              "gflops": 1.227395584,
-              "ops": 22,
-              "macs_by_op": {
-                "conv2d": 601620480,
-                "multihead_attention": 4162560,
-                "linear": 7914752
-              },
-              "mops_by_op": {
-                "conv2d": 601.62048,
-                "multihead_attention": 4.16256,
-                "linear": 7.914752
-              },
-              "layers": [
+                },
                 {
                   "op": "conv2d",
-                  "block": "other",
+                  "block": "conv_radar",
                   "name": "radar2_encoder.net.0",
                   "in_shape": [
                     30,
@@ -4245,7 +5455,7 @@
                 },
                 {
                   "op": "conv2d",
-                  "block": "other",
+                  "block": "conv_radar",
                   "name": "radar2_encoder.net.4",
                   "in_shape": [
                     30,
@@ -4268,7 +5478,7 @@
                 },
                 {
                   "op": "conv2d",
-                  "block": "other",
+                  "block": "conv_radar",
                   "name": "radar2_encoder.net.8",
                   "in_shape": [
                     30,
@@ -4288,317 +5498,6 @@
                   ],
                   "macs": 141557760,
                   "flops": 283115520
-                },
-                {
-                  "op": "multihead_attention",
-                  "block": "other",
-                  "name": "radar2_temporal.net.layers.0.self_attn",
-                  "in_shape": [
-                    1,
-                    30,
-                    128
-                  ],
-                  "macs": 2081280,
-                  "flops": 4162560
-                },
-                {
-                  "op": "linear",
-                  "block": "other",
-                  "name": "radar2_temporal.net.layers.0.linear1",
-                  "in_shape": [
-                    1,
-                    30,
-                    128
-                  ],
-                  "out_shape": [
-                    1,
-                    30,
-                    512
-                  ],
-                  "macs": 1966080,
-                  "flops": 3932160
-                },
-                {
-                  "op": "linear",
-                  "block": "other",
-                  "name": "radar2_temporal.net.layers.0.linear2",
-                  "in_shape": [
-                    1,
-                    30,
-                    512
-                  ],
-                  "out_shape": [
-                    1,
-                    30,
-                    128
-                  ],
-                  "macs": 1966080,
-                  "flops": 3932160
-                },
-                {
-                  "op": "conv2d",
-                  "block": "other",
-                  "name": "audio_encoder.net.0",
-                  "in_shape": [
-                    30,
-                    1,
-                    32,
-                    32
-                  ],
-                  "out_shape": [
-                    30,
-                    32,
-                    32,
-                    32
-                  ],
-                  "kernel": [
-                    3,
-                    3
-                  ],
-                  "macs": 8847360,
-                  "flops": 17694720
-                },
-                {
-                  "op": "conv2d",
-                  "block": "other",
-                  "name": "audio_encoder.net.4",
-                  "in_shape": [
-                    30,
-                    32,
-                    16,
-                    16
-                  ],
-                  "out_shape": [
-                    30,
-                    64,
-                    16,
-                    16
-                  ],
-                  "kernel": [
-                    3,
-                    3
-                  ],
-                  "macs": 141557760,
-                  "flops": 283115520
-                },
-                {
-                  "op": "conv2d",
-                  "block": "other",
-                  "name": "audio_encoder.net.8",
-                  "in_shape": [
-                    30,
-                    64,
-                    8,
-                    8
-                  ],
-                  "out_shape": [
-                    30,
-                    128,
-                    8,
-                    8
-                  ],
-                  "kernel": [
-                    3,
-                    3
-                  ],
-                  "macs": 141557760,
-                  "flops": 283115520
-                },
-                {
-                  "op": "multihead_attention",
-                  "block": "other",
-                  "name": "audio_temporal.net.layers.0.self_attn",
-                  "in_shape": [
-                    1,
-                    30,
-                    128
-                  ],
-                  "macs": 2081280,
-                  "flops": 4162560
-                },
-                {
-                  "op": "linear",
-                  "block": "other",
-                  "name": "audio_temporal.net.layers.0.linear1",
-                  "in_shape": [
-                    1,
-                    30,
-                    128
-                  ],
-                  "out_shape": [
-                    1,
-                    30,
-                    512
-                  ],
-                  "macs": 1966080,
-                  "flops": 3932160
-                },
-                {
-                  "op": "linear",
-                  "block": "other",
-                  "name": "audio_temporal.net.layers.0.linear2",
-                  "in_shape": [
-                    1,
-                    30,
-                    512
-                  ],
-                  "out_shape": [
-                    1,
-                    30,
-                    128
-                  ],
-                  "macs": 1966080,
-                  "flops": 3932160
-                },
-                {
-                  "op": "linear",
-                  "block": "other",
-                  "name": "radar1_quality.1",
-                  "in_shape": [
-                    1,
-                    128
-                  ],
-                  "out_shape": [
-                    1,
-                    1
-                  ],
-                  "macs": 128,
-                  "flops": 256
-                },
-                {
-                  "op": "linear",
-                  "block": "other",
-                  "name": "radar2_quality.1",
-                  "in_shape": [
-                    1,
-                    128
-                  ],
-                  "out_shape": [
-                    1,
-                    1
-                  ],
-                  "macs": 128,
-                  "flops": 256
-                },
-                {
-                  "op": "linear",
-                  "block": "other",
-                  "name": "camera_quality.1",
-                  "in_shape": [
-                    1,
-                    128
-                  ],
-                  "out_shape": [
-                    1,
-                    1
-                  ],
-                  "macs": 128,
-                  "flops": 256
-                },
-                {
-                  "op": "linear",
-                  "block": "other",
-                  "name": "audio_quality.1",
-                  "in_shape": [
-                    1,
-                    128
-                  ],
-                  "out_shape": [
-                    1,
-                    1
-                  ],
-                  "macs": 128,
-                  "flops": 256
-                },
-                {
-                  "op": "linear",
-                  "block": "other",
-                  "name": "coarse_classifier.1",
-                  "in_shape": [
-                    1,
-                    128
-                  ],
-                  "out_shape": [
-                    1,
-                    128
-                  ],
-                  "macs": 16384,
-                  "flops": 32768
-                },
-                {
-                  "op": "linear",
-                  "block": "other",
-                  "name": "coarse_classifier.4",
-                  "in_shape": [
-                    1,
-                    128
-                  ],
-                  "out_shape": [
-                    1,
-                    2
-                  ],
-                  "macs": 256,
-                  "flops": 512
-                },
-                {
-                  "op": "linear",
-                  "block": "other",
-                  "name": "subaction_classifier.1",
-                  "in_shape": [
-                    1,
-                    128
-                  ],
-                  "out_shape": [
-                    1,
-                    128
-                  ],
-                  "macs": 16384,
-                  "flops": 32768
-                },
-                {
-                  "op": "linear",
-                  "block": "other",
-                  "name": "subaction_classifier.4",
-                  "in_shape": [
-                    1,
-                    128
-                  ],
-                  "out_shape": [
-                    1,
-                    2
-                  ],
-                  "macs": 256,
-                  "flops": 512
-                },
-                {
-                  "op": "linear",
-                  "block": "other",
-                  "name": "detect_classifier.1",
-                  "in_shape": [
-                    1,
-                    128
-                  ],
-                  "out_shape": [
-                    1,
-                    128
-                  ],
-                  "macs": 16384,
-                  "flops": 32768
-                },
-                {
-                  "op": "linear",
-                  "block": "other",
-                  "name": "detect_classifier.4",
-                  "in_shape": [
-                    1,
-                    128
-                  ],
-                  "out_shape": [
-                    1,
-                    2
-                  ],
-                  "macs": 256,
-                  "flops": 512
                 }
               ]
             },
@@ -4689,20 +5588,20 @@
               ]
             },
             "temporal_radar": {
-              "macs": 6013440,
-              "flops": 12026880,
-              "mops": 6.01344,
-              "mmacs": 6.01344,
-              "mflops": 12.02688,
-              "gflops": 0.01202688,
-              "ops": 3,
+              "macs": 12026880,
+              "flops": 24053760,
+              "mops": 12.02688,
+              "mmacs": 12.02688,
+              "mflops": 24.05376,
+              "gflops": 0.02405376,
+              "ops": 6,
               "macs_by_op": {
-                "multihead_attention": 2081280,
-                "linear": 3932160
+                "multihead_attention": 4162560,
+                "linear": 7864320
               },
               "mops_by_op": {
-                "multihead_attention": 2.08128,
-                "linear": 3.93216
+                "multihead_attention": 4.16256,
+                "linear": 7.86432
               },
               "layers": [
                 {
@@ -4738,6 +5637,52 @@
                   "op": "linear",
                   "block": "temporal_radar",
                   "name": "radar_temporal.net.layers.0.linear2",
+                  "in_shape": [
+                    1,
+                    30,
+                    512
+                  ],
+                  "out_shape": [
+                    1,
+                    30,
+                    128
+                  ],
+                  "macs": 1966080,
+                  "flops": 3932160
+                },
+                {
+                  "op": "multihead_attention",
+                  "block": "temporal_radar",
+                  "name": "radar2_temporal.net.layers.0.self_attn",
+                  "in_shape": [
+                    1,
+                    30,
+                    128
+                  ],
+                  "macs": 2081280,
+                  "flops": 4162560
+                },
+                {
+                  "op": "linear",
+                  "block": "temporal_radar",
+                  "name": "radar2_temporal.net.layers.0.linear1",
+                  "in_shape": [
+                    1,
+                    30,
+                    128
+                  ],
+                  "out_shape": [
+                    1,
+                    30,
+                    512
+                  ],
+                  "macs": 1966080,
+                  "flops": 3932160
+                },
+                {
+                  "op": "linear",
+                  "block": "temporal_radar",
+                  "name": "radar2_temporal.net.layers.0.linear2",
                   "in_shape": [
                     1,
                     30,
@@ -4819,18 +5764,18 @@
               ]
             },
             "head": {
-              "macs": 147840,
-              "flops": 295680,
-              "mops": 0.14784,
-              "mmacs": 0.14784,
-              "mflops": 0.29568,
-              "gflops": 0.00029568,
-              "ops": 11,
+              "macs": 197760,
+              "flops": 395520,
+              "mops": 0.19776,
+              "mmacs": 0.19776,
+              "mflops": 0.39552,
+              "gflops": 0.00039552,
+              "ops": 17,
               "macs_by_op": {
-                "linear": 147840
+                "linear": 197760
               },
               "mops_by_op": {
-                "linear": 0.14784
+                "linear": 0.19776
               },
               "layers": [
                 {
@@ -4971,6 +5916,66 @@
                 {
                   "op": "linear",
                   "block": "head",
+                  "name": "coarse_classifier.1",
+                  "in_shape": [
+                    1,
+                    128
+                  ],
+                  "out_shape": [
+                    1,
+                    128
+                  ],
+                  "macs": 16384,
+                  "flops": 32768
+                },
+                {
+                  "op": "linear",
+                  "block": "head",
+                  "name": "coarse_classifier.4",
+                  "in_shape": [
+                    1,
+                    128
+                  ],
+                  "out_shape": [
+                    1,
+                    2
+                  ],
+                  "macs": 256,
+                  "flops": 512
+                },
+                {
+                  "op": "linear",
+                  "block": "head",
+                  "name": "subaction_classifier.1",
+                  "in_shape": [
+                    1,
+                    128
+                  ],
+                  "out_shape": [
+                    1,
+                    128
+                  ],
+                  "macs": 16384,
+                  "flops": 32768
+                },
+                {
+                  "op": "linear",
+                  "block": "head",
+                  "name": "subaction_classifier.4",
+                  "in_shape": [
+                    1,
+                    128
+                  ],
+                  "out_shape": [
+                    1,
+                    2
+                  ],
+                  "macs": 256,
+                  "flops": 512
+                },
+                {
+                  "op": "linear",
+                  "block": "head",
                   "name": "human_classifier.1",
                   "in_shape": [
                     1,
@@ -4997,6 +6002,264 @@
                   ],
                   "macs": 256,
                   "flops": 512
+                },
+                {
+                  "op": "linear",
+                  "block": "head",
+                  "name": "detect_classifier.1",
+                  "in_shape": [
+                    1,
+                    128
+                  ],
+                  "out_shape": [
+                    1,
+                    128
+                  ],
+                  "macs": 16384,
+                  "flops": 32768
+                },
+                {
+                  "op": "linear",
+                  "block": "head",
+                  "name": "detect_classifier.4",
+                  "in_shape": [
+                    1,
+                    128
+                  ],
+                  "out_shape": [
+                    1,
+                    2
+                  ],
+                  "macs": 256,
+                  "flops": 512
+                }
+              ]
+            },
+            "conv_audio": {
+              "macs": 291962880,
+              "flops": 583925760,
+              "mops": 291.96288,
+              "mmacs": 291.96288,
+              "mflops": 583.92576,
+              "gflops": 0.58392576,
+              "ops": 3,
+              "macs_by_op": {
+                "conv2d": 291962880
+              },
+              "mops_by_op": {
+                "conv2d": 291.96288
+              },
+              "layers": [
+                {
+                  "op": "conv2d",
+                  "block": "conv_audio",
+                  "name": "audio_encoder.net.0",
+                  "in_shape": [
+                    30,
+                    1,
+                    32,
+                    32
+                  ],
+                  "out_shape": [
+                    30,
+                    32,
+                    32,
+                    32
+                  ],
+                  "kernel": [
+                    3,
+                    3
+                  ],
+                  "macs": 8847360,
+                  "flops": 17694720
+                },
+                {
+                  "op": "conv2d",
+                  "block": "conv_audio",
+                  "name": "audio_encoder.net.4",
+                  "in_shape": [
+                    30,
+                    32,
+                    16,
+                    16
+                  ],
+                  "out_shape": [
+                    30,
+                    64,
+                    16,
+                    16
+                  ],
+                  "kernel": [
+                    3,
+                    3
+                  ],
+                  "macs": 141557760,
+                  "flops": 283115520
+                },
+                {
+                  "op": "conv2d",
+                  "block": "conv_audio",
+                  "name": "audio_encoder.net.8",
+                  "in_shape": [
+                    30,
+                    64,
+                    8,
+                    8
+                  ],
+                  "out_shape": [
+                    30,
+                    128,
+                    8,
+                    8
+                  ],
+                  "kernel": [
+                    3,
+                    3
+                  ],
+                  "macs": 141557760,
+                  "flops": 283115520
+                }
+              ]
+            },
+            "temporal_audio": {
+              "macs": 6013440,
+              "flops": 12026880,
+              "mops": 6.01344,
+              "mmacs": 6.01344,
+              "mflops": 12.02688,
+              "gflops": 0.01202688,
+              "ops": 3,
+              "macs_by_op": {
+                "multihead_attention": 2081280,
+                "linear": 3932160
+              },
+              "mops_by_op": {
+                "multihead_attention": 2.08128,
+                "linear": 3.93216
+              },
+              "layers": [
+                {
+                  "op": "multihead_attention",
+                  "block": "temporal_audio",
+                  "name": "audio_temporal.net.layers.0.self_attn",
+                  "in_shape": [
+                    1,
+                    30,
+                    128
+                  ],
+                  "macs": 2081280,
+                  "flops": 4162560
+                },
+                {
+                  "op": "linear",
+                  "block": "temporal_audio",
+                  "name": "audio_temporal.net.layers.0.linear1",
+                  "in_shape": [
+                    1,
+                    30,
+                    128
+                  ],
+                  "out_shape": [
+                    1,
+                    30,
+                    512
+                  ],
+                  "macs": 1966080,
+                  "flops": 3932160
+                },
+                {
+                  "op": "linear",
+                  "block": "temporal_audio",
+                  "name": "audio_temporal.net.layers.0.linear2",
+                  "in_shape": [
+                    1,
+                    30,
+                    512
+                  ],
+                  "out_shape": [
+                    1,
+                    30,
+                    128
+                  ],
+                  "macs": 1966080,
+                  "flops": 3932160
+                }
+              ]
+            },
+            "other": {
+              "macs": 512,
+              "flops": 1024,
+              "mops": 0.000512,
+              "mmacs": 0.000512,
+              "mflops": 0.001024,
+              "gflops": 1.024e-06,
+              "ops": 4,
+              "macs_by_op": {
+                "linear": 512
+              },
+              "mops_by_op": {
+                "linear": 0.000512
+              },
+              "layers": [
+                {
+                  "op": "linear",
+                  "block": "other",
+                  "name": "radar1_quality.1",
+                  "in_shape": [
+                    1,
+                    128
+                  ],
+                  "out_shape": [
+                    1,
+                    1
+                  ],
+                  "macs": 128,
+                  "flops": 256
+                },
+                {
+                  "op": "linear",
+                  "block": "other",
+                  "name": "radar2_quality.1",
+                  "in_shape": [
+                    1,
+                    128
+                  ],
+                  "out_shape": [
+                    1,
+                    1
+                  ],
+                  "macs": 128,
+                  "flops": 256
+                },
+                {
+                  "op": "linear",
+                  "block": "other",
+                  "name": "camera_quality.1",
+                  "in_shape": [
+                    1,
+                    128
+                  ],
+                  "out_shape": [
+                    1,
+                    1
+                  ],
+                  "macs": 128,
+                  "flops": 256
+                },
+                {
+                  "op": "linear",
+                  "block": "other",
+                  "name": "audio_quality.1",
+                  "in_shape": [
+                    1,
+                    128
+                  ],
+                  "out_shape": [
+                    1,
+                    1
+                  ],
+                  "macs": 128,
+                  "flops": 256
                 }
               ]
             },
@@ -5373,20 +6636,20 @@
       "latency": {
         "runs": 30.0,
         "warmup": 10.0,
-        "latency_ms_mean": 73.6775672998192,
-        "latency_ms_std": 6.680714677640074,
-        "latency_ms_min": 61.58974699974351,
-        "latency_ms_max": 86.29922999898554,
-        "latency_ms_p50": 72.6464945000771,
-        "latency_ms_p95": 83.19263995017536,
-        "latency_ms_p99": 85.59041605936727,
-        "throughput_fps": 13.572652255613411
+        "latency_ms_mean": 95.26609670004594,
+        "latency_ms_std": 8.536841386577484,
+        "latency_ms_min": 80.18321599956835,
+        "latency_ms_max": 110.21462499775225,
+        "latency_ms_p50": 94.88104800038855,
+        "latency_ms_p95": 108.65107299887313,
+        "latency_ms_p99": 109.96764069775963,
+        "throughput_fps": 10.496913746225921
       },
       "performance": {
-        "achieved_mops_per_s": 64842.04361090141,
-        "achieved_gflops_per_s": 129.68408722180283,
-        "conv2d_mops_per_s": 63853.678296074046,
-        "temporal_transformer_mops_per_s": 163.23665995999184,
+        "achieved_mops_per_s": 50147.99805477594,
+        "achieved_gflops_per_s": 100.29599610955188,
+        "conv2d_mops_per_s": 49383.60910086213,
+        "temporal_transformer_mops_per_s": 252.4902439924192,
         "note": "achieved_* = theoretical ops / measured mean inference latency on live data windows"
       }
     }
