@@ -1558,6 +1558,7 @@ class JetsonGuiApp:
       "camera_width": int(self.args.camera_width),
       "camera_height": int(self.args.camera_height),
       "camera_fps": float(self.args.camera_fps),
+      "audio_device": None if self.audio_device_var.get().strip() in ("(none)", "") else self._audio_index_from_var(),
       "num_rx": int(self.args.num_rx),
       "radar_profile": str(self.args.radar_profile),
       "frame_rate": float(self.args.frame_rate),

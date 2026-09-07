@@ -24,6 +24,7 @@ import sys
 import threading
 import time
 from collections import defaultdict, deque
+from contextlib import nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -74,10 +75,10 @@ CLI_EXAMPLES = """Examples:
       Run the default benchmark on the default checkpoint and write JSON to artifacts/.
 
   python benchmark.py --live
-      Live cam+radar KPI bench (needs BGT + USB cam).
+      Live cam + dual radar + mic KPI bench (needs BGT + USB cam + mic).
 
   python benchmark.py --live --mode camera_only
-      Live USB-camera KPI bench; radar gated off (no radar SDK required).
+      Live USB-camera KPI bench; radar and mic gated off.
 
   python benchmark.py --all-modes
       Benchmark both, radar_only, camera_only, and audio_* ablations if the ckpt has audio.
@@ -777,6 +778,55 @@ def synth_audio_kwargs(
   }
 
 
+def _start_live_mic(audio_device: int | str | None, sample_rate: int):
+  from live_audio import LiveAudioBuffer
+
+  buf = LiveAudioBuffer(sample_rate=sample_rate)
+  buf.start(device=audio_device)
+  if not buf.running:
+    raise RuntimeError(f"live mic failed: {buf.last_error or 'not started'}")
+  return buf
+
+
+def live_audio_kwargs_from_wave(
+  model: nn.Module,
+  device: torch.device,
+  wave: np.ndarray,
+  *,
+  window: int,
+  frame_rate: float,
+  present: bool,
+) -> dict[str, Any]:
+  if not _enable_audio(model):
+    return audio_off_kwargs(model, device)
+  from audio_features import mel_tensor_from_wave
+
+  sample_rate = int(getattr(model, "audio_sample_rate", 16000) or 16000)
+  n_mels = int(getattr(model, "audio_n_mels", 32) or 32)
+  n_w = int(getattr(model, "audio_mel_width", 32) or 32)
+  win_s = float(window) / max(float(frame_rate), 1e-6)
+  n_keep = max(1, int(np.ceil((win_s + 0.35) * sample_rate)))
+  if wave.size > n_keep:
+    wave = wave[-n_keep:]
+  min_samples = max(1, int(sample_rate / max(frame_rate, 1.0)))
+  got = bool(present) and wave.size >= min_samples
+  if wave.size < min_samples:
+    wave = np.zeros(max(min_samples, 1), dtype=np.float32)
+  patches = mel_tensor_from_wave(
+    wave, sample_rate, window, frame_rate, n_mels=n_mels, mel_width=n_w
+  )
+  if patches.shape[0] < window:
+    pad_n = window - patches.shape[0]
+    pad = patches[:1].expand(pad_n, *patches.shape[1:]).clone()
+    patches = torch.cat([pad, patches], dim=0)
+  elif patches.shape[0] > window:
+    patches = patches[-window:]
+  return {
+    "audio": patches.unsqueeze(0).to(device),
+    "audio_present": torch.tensor([got], dtype=torch.bool, device=device),
+  }
+
+
 def _model_forward(
   model: nn.Module,
   radar: torch.Tensor,
@@ -976,33 +1026,48 @@ def profile_live_mode(
   mirror_radar2: bool,
   min_range_m: float,
   max_range_m: float | None,
+  audio_device: int | str | None = None,
 ) -> dict[str, Any]:
   if batch != 1:
     raise ValueError("live mode currently supports --batch-size 1 only")
-  if mode not in ("both", "camera_only"):
-    raise ValueError(f"live mode does not support --mode {mode!r} (use both or camera_only)")
+  enable_audio = _enable_audio(model)
+  radar_on, camera_on, audio_on = modality_present(mode, enable_audio=enable_audio)
 
-  camera_only = mode == "camera_only"
-  CameraStream = _live_camera_deps()
-
+  CameraStream = _live_camera_deps() if camera_on else None
   camera_buffer: deque[torch.Tensor] = deque(maxlen=window)
   radar_buffer: deque[torch.Tensor] = deque(maxlen=window)
   radar2_buffer: deque[torch.Tensor] = deque(maxlen=window)
-  radar_present = torch.tensor([not camera_only], dtype=torch.bool, device=device)
-  camera_present = torch.ones((1,), dtype=torch.bool, device=device)
-  live_audio_on = _enable_audio(model) and not camera_only
-  audio_kw = synth_audio_kwargs(model, device, batch=1, window=window, present=live_audio_on)
+  radar_present = torch.tensor([radar_on], dtype=torch.bool, device=device)
+  camera_present = torch.tensor([camera_on], dtype=torch.bool, device=device)
+  sample_rate = int(getattr(model, "audio_sample_rate", 16000) or 16000)
 
   model.eval()
-  camera_stream = CameraStream(camera_device, camera_width, camera_height, camera_fps).start()
-  latest_meta: dict[str, Any] = {"camera_only": camera_only}
+  camera_stream = None
+  audio_buf = None
+  latest_meta: dict[str, Any] = {"mode": mode}
   stage_times: dict[str, list[float]] = defaultdict(list)
   compute: dict[str, Any] | None = None
   warmup_remaining = int(warmup)
   measured = 0
 
+  def _audio_extra() -> dict[str, Any]:
+    if not audio_on:
+      return synth_audio_kwargs(model, device, batch=1, window=window, present=False)
+    wave = audio_buf.snapshot() if audio_buf is not None else np.zeros(0, dtype=np.float32)
+    return live_audio_kwargs_from_wave(
+      model, device, wave, window=window, frame_rate=frame_rate_hz, present=True
+    )
+
+  def _audio_ready() -> bool:
+    if not audio_on:
+      return True
+    if audio_buf is None or not audio_buf.running:
+      return False
+    min_samples = max(1, int(sample_rate / max(frame_rate_hz, 1.0)))
+    return audio_buf.snapshot().size >= min_samples
+
   def _run_forward(radar_t: torch.Tensor, camera_t: torch.Tensor, radar2_t: torch.Tensor | None = None) -> None:
-    extra = dict(audio_kw)
+    extra = _audio_extra()
     extra["radar2"] = radar2_t if radar2_t is not None else radar_t
     with torch.no_grad():
       _model_forward(model, radar_t, camera_t, radar_present, camera_present, extra)
@@ -1034,55 +1099,47 @@ def profile_live_mode(
     stage_times["total_loop_ms"].append((time.perf_counter() - t_loop0) * 1000.0)
     measured += 1
 
+  print(
+    f"live {mode}: cam={'on' if camera_on else 'off'} radar={'on' if radar_on else 'off'} "
+    f"audio={'mic' if audio_on else 'off'} window={window}"
+  )
+  radar_cm: Any = nullcontext()
+  fuse_fn = None
+  if radar_on:
+    DualRadarSession, fuse_fn = _live_radar_deps()
+    radar_cm = DualRadarSession(
+      num_rx=num_rx,
+      profile=radar_profile,
+      frame_rate_hz=frame_rate_hz,
+      radar1_uuid=radar1_uuid,
+      radar2_uuid=radar2_uuid,
+      radar1_port=radar1_port,
+      radar2_port=radar2_port,
+      mirror_radar2=mirror_radar2,
+      min_range_m=min_range_m,
+      max_range_m=max_range_m,
+    )
   try:
-    if camera_only:
-      print(
-        f"live camera_only KPI: cam={camera_device} window={window} "
-        "radar=OFF (zeros, radar_present=False)"
-      )
+    if camera_on:
+      camera_stream = CameraStream(camera_device, camera_width, camera_height, camera_fps).start()
+    if audio_on:
+      audio_buf = _start_live_mic(audio_device, sample_rate)
+    with radar_cm as radar_session:
+      if radar_on and radar_session is not None:
+        if not radar_session.slots[0].available and not radar_session.slots[1].available:
+          raise RuntimeError(f"No live radar device available for --live --mode {mode}")
       while measured < runs:
         t_loop0 = time.perf_counter()
-        t0 = time.perf_counter()
-        camera_rgb = camera_stream.get_latest()
-        if camera_rgb is None:
-          time.sleep(0.005)
-          continue
-        camera_tensor = preprocess_camera_frame(camera_rgb, image_size).cpu()
-        stage_times["camera_fetch_preprocess_ms"].append((time.perf_counter() - t0) * 1000.0)
-
-        camera_buffer.append(camera_tensor)
-        if len(camera_buffer) < window:
-          continue
-
         radar_t = torch.zeros(1, window, 3, 32, 32, device=device)
-        camera_t = torch.stack(list(camera_buffer), dim=0).unsqueeze(0).to(device)
-        _measure_once(radar_t, camera_t, t_loop0=t_loop0)
-    else:
-      DualRadarSession, fuse_radar_streams_for_model = _live_radar_deps()
-      with DualRadarSession(
-        num_rx=num_rx,
-        profile=radar_profile,
-        frame_rate_hz=frame_rate_hz,
-        radar1_uuid=radar1_uuid,
-        radar2_uuid=radar2_uuid,
-        radar1_port=radar1_port,
-        radar2_port=radar2_port,
-        mirror_radar2=mirror_radar2,
-        min_range_m=min_range_m,
-        max_range_m=max_range_m,
-      ) as radar_session:
-        if not radar_session.slots[0].available and not radar_session.slots[1].available:
-          raise RuntimeError("No live radar device available for --live --mode both")
+        radar2_t = radar_t
+        camera_t = torch.zeros(1, window, 3, image_size, image_size, device=device)
 
-        while measured < runs:
-          t_loop0 = time.perf_counter()
-
+        if radar_on and radar_session is not None:
           t0 = time.perf_counter()
           radar1, radar2 = radar_session.read_tensors()
           stage_times["radar_capture_ms"].append((time.perf_counter() - t0) * 1000.0)
-
           t0 = time.perf_counter()
-          fused_radar, fuse_meta = fuse_radar_streams_for_model(
+          fused_radar, fuse_meta = fuse_fn(
             radar1,
             radar2,
             mode="none",
@@ -1091,32 +1148,44 @@ def profile_live_mode(
           stage_times["radar_fuse_ms"].append((time.perf_counter() - t0) * 1000.0)
           latest_meta = dict(fuse_meta)
           latest_meta["status_text"] = radar_session.status_text
-          latest_meta["camera_only"] = False
-
           r1_use = radar1 if radar1 is not None else radar2
           r2_use = radar2 if radar2 is not None else radar1
           if r1_use is None:
             continue
+          radar_buffer.append(r1_use.cpu())
+          radar2_buffer.append((r2_use if r2_use is not None else r1_use).cpu())
+          if len(radar_buffer) < window:
+            continue
+          radar_t = torch.stack(list(radar_buffer), dim=0).unsqueeze(0).to(device)
+          radar2_t = torch.stack(list(radar2_buffer), dim=0).unsqueeze(0).to(device)
 
+        if camera_on and camera_stream is not None:
           t0 = time.perf_counter()
           camera_rgb = camera_stream.get_latest()
           if camera_rgb is None:
+            time.sleep(0.005)
             continue
           camera_tensor = preprocess_camera_frame(camera_rgb, image_size).cpu()
           stage_times["camera_fetch_preprocess_ms"].append((time.perf_counter() - t0) * 1000.0)
-
-          radar_buffer.append(r1_use.cpu())
-          radar2_buffer.append((r2_use if r2_use is not None else r1_use).cpu())
           camera_buffer.append(camera_tensor)
-          if len(radar_buffer) < window or len(camera_buffer) < window:
+          if len(camera_buffer) < window:
             continue
-
-          radar_t = torch.stack(list(radar_buffer), dim=0).unsqueeze(0).to(device)
-          radar2_t = torch.stack(list(radar2_buffer), dim=0).unsqueeze(0).to(device)
           camera_t = torch.stack(list(camera_buffer), dim=0).unsqueeze(0).to(device)
-          _measure_once(radar_t, camera_t, t_loop0=t_loop0, radar2_t=radar2_t)
+
+        if not _audio_ready():
+          time.sleep(0.005)
+          continue
+        if audio_on:
+          t0 = time.perf_counter()
+          _ = _audio_extra()
+          stage_times["audio_mel_ms"].append((time.perf_counter() - t0) * 1000.0)
+
+        _measure_once(radar_t, camera_t, t_loop0=t_loop0, radar2_t=radar2_t)
   finally:
-    camera_stream.stop()
+    if camera_stream is not None:
+      camera_stream.stop()
+    if audio_buf is not None:
+      audio_buf.stop()
 
   if compute is None or not stage_times["inference_ms"]:
     raise RuntimeError("Live benchmark did not gather enough frames to build a full input window")
@@ -1137,7 +1206,7 @@ def profile_live_mode(
   mean_s = latency["latency_ms_mean"] / 1000.0
   specs = compute.get("operation_specs", {})
   temporal_mops = float(specs.get("temporal_transformer", {}).get("mops", 0.0))
-  profile_mode_name = "live_camera_only" if camera_only else "live_both"
+  profile_mode_name = f"live_{mode}"
 
   return {
     "mode": profile_mode_name,
@@ -1146,34 +1215,33 @@ def profile_live_mode(
       "window": window,
       "radar_shape": [1, window, 3, 32, 32],
       "camera_shape": [1, window, 3, image_size, image_size],
-      "radar_present": not camera_only,
-      "camera_present": True,
-      "audio_present": live_audio_on,
-      "enable_audio": _enable_audio(model),
+      "radar_present": radar_on,
+      "camera_present": camera_on,
+      "audio_present": audio_on,
+      "enable_audio": enable_audio,
+      "audio_source": "live_mic" if audio_on else "off",
     },
     "live_capture": {
-      "camera_device": camera_device,
-      "camera_width": camera_width,
-      "camera_height": camera_height,
-      "camera_fps": camera_fps,
-      "num_rx": None if camera_only else num_rx,
-      "radar_profile": None if camera_only else radar_profile,
-      "frame_rate_hz": None if camera_only else frame_rate_hz,
-      "radar1_uuid": None if camera_only else radar1_uuid,
-      "radar2_uuid": None if camera_only else radar2_uuid,
-      "radar1_port": None if camera_only else radar1_port,
-      "radar2_port": None if camera_only else radar2_port,
-      "mirror_radar2": None if camera_only else mirror_radar2,
+      "camera_device": camera_device if camera_on else None,
+      "camera_width": camera_width if camera_on else None,
+      "camera_height": camera_height if camera_on else None,
+      "camera_fps": camera_fps if camera_on else None,
+      "audio_device": audio_device if audio_on else None,
+      "num_rx": num_rx if radar_on else None,
+      "radar_profile": radar_profile if radar_on else None,
+      "frame_rate_hz": frame_rate_hz if radar_on else None,
+      "radar1_uuid": radar1_uuid if radar_on else None,
+      "radar2_uuid": radar2_uuid if radar_on else None,
+      "radar1_port": radar1_port if radar_on else None,
+      "radar2_port": radar2_port if radar_on else None,
+      "mirror_radar2": mirror_radar2 if radar_on else None,
       "fusion_meta_last": latest_meta,
       "timing": {
         key: _summarize_timing_series(values) for key, values in stage_times.items() if values
       },
       "notes": [
-        (
-          "camera_only: radar tensor is zeros with radar_present=False; no radar SDK."
-          if camera_only
-          else "total_loop_ms includes live sensor polling, radar fusion, camera fetch/preprocess, and model inference (synth audio if ckpt has audio)."
-        ),
+        "Live sensors: USB cam / dual radar / mic as required by --mode.",
+        "both = cam + radar + mic when the checkpoint has enable_audio.",
         "latency.* remains model-forward latency only so KPI thresholds stay comparable.",
       ],
     },
@@ -1226,11 +1294,7 @@ def run_benchmark(args) -> dict[str, Any]:
     if args.live:
       live_mode = args.mode
       if args.all_modes:
-        raise SystemExit("--all-modes is not supported with --live (pick --mode both or camera_only)")
-      if live_mode == "radar_only":
-        raise SystemExit("--live --mode radar_only is not supported yet")
-      if live_mode in ("audio_only", "audio_radar", "audio_camera"):
-        raise SystemExit(f"--live --mode {live_mode} is not supported (use both or camera_only)")
+        raise SystemExit("--all-modes is not supported with --live (pick a single --mode)")
       profiles = [
         profile_live_mode(
           model,
@@ -1255,6 +1319,7 @@ def run_benchmark(args) -> dict[str, Any]:
           mirror_radar2=not args.no_mirror_radar2,
           min_range_m=args.min_range_m,
           max_range_m=args.max_range_m,
+          audio_device=getattr(args, "audio_device", None),
         )
       ]
     else:
@@ -1305,6 +1370,8 @@ def run_benchmark(args) -> dict[str, Any]:
   if args.live and args.mode == "camera_only":
     deploy_profile = "cam1_radar_off"
     deploy_note = "Live camera-only: radar zeros + radar_present=False (no radar SDK)."
+  elif args.live and enable_audio:
+    deploy_note = "Live USB cam + dual radar + mic (streams follow --mode)."
 
   report = {
     "timestamp_utc": datetime.now(timezone.utc).isoformat(),
@@ -1669,7 +1736,8 @@ def parse_args():
     action="store_true",
     help="Benchmark both + radar_only + camera_only [+ audio_only/audio_radar/audio_camera]",
   )
-  parser.add_argument("--live", action="store_true", help="Use live USB camera (and radar unless --mode camera_only)")
+  parser.add_argument("--live", action="store_true", help="Live USB cam + dual radar + mic (streams follow --mode)")
+  parser.add_argument("--audio-device", default=None, help="Live mic: PortAudio index, ALSA plughw, or dshow name")
   parser.add_argument("--n-cameras", type=int, default=1, help="Deployment camera count (KPI buffer est.)")
   parser.add_argument("--n-radars", type=int, default=2, help="Deployment radar count (KPI buffer est.)")
   parser.add_argument("--camera-device", type=int, default=0, help="Live mode: camera index")

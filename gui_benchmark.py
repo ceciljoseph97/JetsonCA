@@ -28,6 +28,7 @@ def make_gui_bench_args(**overrides: Any) -> argparse.Namespace:
     mode="both",
     all_modes=False,
     live=False,
+    audio_device=None,
     n_cameras=1,
     n_radars=2,
     camera_device=0,
@@ -91,7 +92,7 @@ def mount_profile_tab(
   ttk.Checkbutton(opts, text="All modes (cam / radar / audio ablations)", variable=all_modes_var).grid(
     row=3, column=0, sticky="w", padx=4, pady=2
   )
-  ttk.Checkbutton(opts, text="Live sensors (USB cam ± radar)", variable=live_var).grid(
+  ttk.Checkbutton(opts, text="Live sensors (USB cam + radar + mic)", variable=live_var).grid(
     row=4, column=0, sticky="w", padx=4, pady=2
   )
   row = ttk.Frame(opts)
