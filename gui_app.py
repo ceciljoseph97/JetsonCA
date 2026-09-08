@@ -730,10 +730,9 @@ class InferenceWorker:
       probs = apply_logit_bias(probs, self.labels, self.logit_bias)
       human_prob, detect_prob = self._presence_probs(out)
       motion_ok = self._motion_ok(radar_present, camera_present)
+      # Do NOT force presence=1 for walking_only — detect/human thresholds must still apply.
+      # (Activity head is 1-class so argmax is always "walking"; presence is the real gate.)
       presence = detect_prob if self.enable_detect_head else human_prob
-      # walking_bg: 1-class activity softmax is always walking. Doppler is walk vs still.
-      if self.walking_only and motion_ok:
-        presence = max(presence, 1.0)
       audio_solo = (not radar_present) and (not camera_present) and bool(self.audio_enabled and self.enable_audio)
       if audio_solo:
         human_thr = 0.0
@@ -1018,14 +1017,11 @@ class InferenceWorker:
           human_ok = detect_prob >= threshold
         else:
           human_ok = human_prob >= self.human_threshold
-        if self.walking_only:
-          emit_activity = motion_ok and in_range_ok
-          display_human = 1.0 if emit_activity else 0.0
-          gate_open = emit_activity
-        else:
-          emit_activity = human_ok and motion_ok and in_range_ok
-          display_human = detect_prob if self.enable_detect_head else human_prob
-          gate_open = detect_prob >= threshold if self.enable_detect_head else human_ok
+        # walking_bg used to open the gate on radar motion alone and force walking@1.00,
+        # ignoring detect/human thresholds. Same gate for all ckpts now.
+        emit_activity = human_ok and motion_ok and in_range_ok
+        display_human = detect_prob if self.enable_detect_head else human_prob
+        gate_open = emit_activity
         probs = self._fused_display_probs(
           display_human,
           activity_probs,
@@ -1038,14 +1034,11 @@ class InferenceWorker:
         raw_prediction = label
         suppress_reason = ""
         if not gate_open:
-          if self.walking_only:
-            prediction = label
-            suppress_reason = f"no motion (det={detect_prob:.2f})"
-          else:
-            prediction = "none"
-            suppress_reason = (
-              f"gate closed (det={detect_prob:.2f} motion={'ok' if motion_ok else 'off'})"
-            )
+          prediction = "none"
+          suppress_reason = (
+            f"gate closed (det={detect_prob:.2f} hum={human_prob:.2f} "
+            f"motion={'ok' if motion_ok else 'off'})"
+          )
         elif label == "uncertain":
           prediction = "none"
           suppress_reason = "low margin"
