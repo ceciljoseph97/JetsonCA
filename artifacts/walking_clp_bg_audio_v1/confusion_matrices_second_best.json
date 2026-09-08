@@ -1,0 +1,90 @@
+{
+  "human": {
+    "labels": [
+      "background",
+      "human"
+    ],
+    "matrix": [
+      [
+        13,
+        0
+      ],
+      [
+        5,
+        21
+      ]
+    ]
+  },
+  "detect": {
+    "labels": [
+      "no_target",
+      "target"
+    ],
+    "matrix": [
+      [
+        13,
+        0
+      ],
+      [
+        5,
+        21
+      ]
+    ]
+  },
+  "activity": {
+    "labels": [
+      "clapping",
+      "walking"
+    ],
+    "matrix": [
+      [
+        14,
+        0
+      ],
+      [
+        0,
+        12
+      ]
+    ]
+  },
+  "coarse": {
+    "labels": [
+      "clapping",
+      "none",
+      "walking"
+    ],
+    "matrix": [
+      [
+        14,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        12
+      ]
+    ]
+  },
+  "subaction": {
+    "labels": [
+      "none",
+      "still"
+    ],
+    "matrix": [
+      [
+        0,
+        0
+      ],
+      [
+        0,
+        26
+      ]
+    ]
+  }
+}

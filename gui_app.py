@@ -22,7 +22,7 @@ import torch
 import torch.nn.functional as F
 import tkinter as tk
 from PIL import Image, ImageDraw, ImageFont, ImageTk
-from tkinter import ttk
+from tkinter import filedialog, ttk
 
 from audio_features import mel_tensor_from_wave, render_audio_monitor_rgb
 from checkpoint import default_checkpoint, load_checkpoint, preprocess_camera_frame
@@ -141,6 +141,201 @@ def _default_reliance(*, camera: bool = True, radar: bool = True, audio: bool = 
   }
 
 
+class SessionRecorder:
+  """Window/session MP4 (+ mic AAC mux) recorder — same behavior as Crossattention GUI."""
+
+  def __init__(self):
+    self.output_path: Path | None = None
+    self.fps = 8.0
+    self.audio_sample_rate = 16000
+    self._writer = None
+    self._enabled = False
+    self.frame_count = 0
+    self.last_error: str | None = None
+    self._video_tmp: Path | None = None
+    self._audio_chunks: list[np.ndarray] = []
+    self._audio_cursor = 0
+    self._want_audio = True
+    self._audio_gained = False
+
+  def start(self, output_path: Path, fps: float, *, audio_sample_rate: int = 16000, capture_audio: bool = True):
+    self.stop()
+    self.last_error = None
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    self.output_path = output_path
+    self.fps = float(fps)
+    self.audio_sample_rate = int(audio_sample_rate)
+    self._want_audio = bool(capture_audio) and output_path.suffix.lower() != ".gif"
+    self._audio_chunks = []
+    self._audio_cursor = 0
+    self._video_tmp = None
+    try:
+      import imageio
+
+      suffix = output_path.suffix.lower()
+      if suffix == ".gif":
+        self._writer = imageio.get_writer(output_path, fps=fps)
+      else:
+        self._video_tmp = output_path.with_name(output_path.stem + ".__video_tmp__.mp4")
+        self._writer = imageio.get_writer(
+          self._video_tmp, fps=fps, format="FFMPEG", codec="libx264"
+        )
+      self._enabled = True
+      self.frame_count = 0
+    except Exception as exc:
+      self.last_error = str(exc)
+      self._writer = None
+      self._enabled = False
+      raise
+
+  def sync_audio_cursor(self, wave: np.ndarray):
+    self._audio_cursor = int(np.asarray(wave).size)
+
+  def add(self, rgb_frame: np.ndarray):
+    if self._enabled and self._writer is not None:
+      self._writer.append_data(rgb_frame)
+      self.frame_count += 1
+
+  def add_audio_snapshot(self, wave: np.ndarray):
+    if not self._enabled or not self._want_audio:
+      return
+    arr = np.asarray(wave, dtype=np.float32).reshape(-1)
+    if arr.size == 0:
+      return
+    if arr.size < self._audio_cursor:
+      self._audio_cursor = 0
+    if arr.size <= self._audio_cursor:
+      return
+    chunk = arr[self._audio_cursor :].copy()
+    self._audio_cursor = int(arr.size)
+    if chunk.size:
+      self._audio_chunks.append(chunk)
+
+  def _mux_audio(self, video_path: Path, audio_wave: np.ndarray, out_path: Path, wav_path: Path) -> None:
+    import subprocess
+    import wave as wave_mod
+
+    try:
+      import imageio_ffmpeg
+
+      ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+      from device_select import ffmpeg_exe
+
+      ffmpeg = ffmpeg_exe()
+      if ffmpeg is None:
+        raise RuntimeError("ffmpeg unavailable for audio mux")
+
+    pcm = np.clip(np.asarray(audio_wave, dtype=np.float32).reshape(-1), -1.0, 1.0)
+    peak = float(np.max(np.abs(pcm))) if pcm.size else 0.0
+    if 1e-5 < peak < 0.08:
+      pcm = np.clip(pcm * (0.28 / peak), -1.0, 1.0)
+      self._audio_gained = True
+    else:
+      self._audio_gained = False
+    pcm_i16 = (pcm * 32767.0).astype(np.int16)
+    wav_path.parent.mkdir(parents=True, exist_ok=True)
+    with wave_mod.open(str(wav_path), "wb") as wf:
+      wf.setnchannels(1)
+      wf.setsampwidth(2)
+      wf.setframerate(self.audio_sample_rate)
+      wf.writeframes(pcm_i16.tobytes())
+
+    targets = [out_path]
+    stamped = out_path.with_name(out_path.stem + time.strftime("_%H%M%S") + out_path.suffix)
+    if stamped != out_path:
+      targets.append(stamped)
+    last_err = "mux failed"
+    for dest in targets:
+      cmd = [
+        ffmpeg, "-y",
+        "-i", str(video_path),
+        "-i", str(wav_path),
+        "-map", "0:v:0", "-map", "1:a:0",
+        "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
+        "-ar", "16000", "-ac", "1",
+        "-movflags", "+faststart",
+        str(dest),
+      ]
+      proc = subprocess.run(cmd, capture_output=True, text=True)
+      if proc.returncode == 0 and dest.exists() and dest.stat().st_size > 0:
+        if dest != out_path:
+          self.output_path = dest
+        return
+      last_err = (proc.stderr or proc.stdout or "ffmpeg mux failed")[-800:]
+    raise RuntimeError(last_err)
+
+  def stop(self, audio_wave: np.ndarray | None = None) -> str | None:
+    note: str | None = None
+    if self._writer is not None:
+      try:
+        self._writer.close()
+      except Exception:
+        pass
+    self._writer = None
+    was_enabled = self._enabled
+    self._enabled = False
+
+    out = self.output_path
+    video_tmp = self._video_tmp
+    parts: list[np.ndarray] = []
+    if audio_wave is not None and np.asarray(audio_wave).size > 0:
+      parts.append(np.asarray(audio_wave, dtype=np.float32).reshape(-1))
+    if self._audio_chunks:
+      parts.append(np.concatenate(self._audio_chunks).astype(np.float32))
+    audio = np.concatenate(parts) if parts else np.zeros(0, dtype=np.float32)
+    self._audio_chunks = []
+    self._audio_cursor = 0
+    self._video_tmp = None
+
+    if not was_enabled or out is None:
+      return None
+
+    wav_path = out.with_suffix(".wav")
+    if video_tmp is not None and video_tmp.exists():
+      if self._want_audio and audio.size > max(256, self.audio_sample_rate // 20):
+        try:
+          self._mux_audio(video_tmp, audio, out, wav_path)
+          dest = self.output_path or out
+          extra = " +gain" if self._audio_gained else ""
+          note = (
+            f"saved {dest.name} (video+mic {audio.size / self.audio_sample_rate:.1f}s{extra}; "
+            f"wav={wav_path.name})"
+          )
+        except Exception as exc:
+          self.last_error = str(exc)
+          try:
+            if out.exists():
+              out.unlink()
+            video_tmp.replace(out)
+          except Exception:
+            pass
+          note = f"saved {out.name} (video; mux failed). wav={wav_path.name if wav_path.exists() else 'none'} err={exc}"
+      else:
+        try:
+          if out.exists():
+            out.unlink()
+          video_tmp.replace(out)
+        except Exception as exc:
+          self.last_error = str(exc)
+        if self._want_audio:
+          note = f"saved {out.name} (video only; no mic samples n={audio.size})"
+        else:
+          note = f"saved {out.name}"
+      try:
+        if video_tmp.exists():
+          video_tmp.unlink()
+      except Exception:
+        pass
+    elif out.suffix.lower() == ".gif":
+      note = f"saved {out.name} (gif, no audio)"
+    return note
+
+  @property
+  def enabled(self) -> bool:
+    return self._enabled
+
+
 class InferenceWorker:
   def __init__(
     self,
@@ -242,6 +437,7 @@ class InferenceWorker:
     self.audio_device_index: int | str | None = None
     self.audio_input_enabled = True
     self.audio_enabled = bool(self.enable_audio)
+    self.recording_active = False
 
     self.camera_buffer: deque[torch.Tensor] = deque(maxlen=window_len)
     self.camera_rgb_buffer: deque[np.ndarray] = deque(maxlen=window_len)
@@ -318,6 +514,10 @@ class InferenceWorker:
       self.audio_buffer.stop()
     self._audio_retry_at = 0.0
 
+  def set_recording_active(self, active: bool):
+    with self.state_lock:
+      self.recording_active = bool(active)
+
   @property
   def display_labels(self) -> list[str]:
     labels = list(self.config.get("all_labels") or self.labels)
@@ -375,8 +575,11 @@ class InferenceWorker:
     return True
 
   def _ensure_audio(self):
-    if not (self.enable_audio and self.audio_input_enabled):
-      if self.audio_buffer.running:
+    with self.state_lock:
+      recording = bool(self.recording_active)
+    need = bool(self.enable_audio and self.audio_input_enabled) or recording
+    if not need:
+      if self.audio_buffer.running and not recording:
         self.audio_buffer.stop()
       return
     if self.audio_buffer.running:
@@ -1019,6 +1222,11 @@ class JetsonGuiApp:
     self.worker_thread: threading.Thread | None = None
     self._sensor_scan_thread: threading.Thread | None = None
     self._probed_once = False
+    self.recorder = SessionRecorder()
+    self.record_enabled = tk.BooleanVar(value=False)
+    self.record_path_var = tk.StringVar(
+      value=str(args.record) if getattr(args, "record", None) else "recordings/gui_session.mp4"
+    )
 
     self.status_var = tk.StringVar(value="idle — pick devices, then Start")
     self.prediction_var = tk.StringVar(value="-")
@@ -1219,8 +1427,21 @@ class JetsonGuiApp:
     ttk.Checkbutton(prof, text="Resource", variable=self.profile_resource_var).pack(side="left", padx=(0, 8))
     ttk.Checkbutton(prof, text="Compute", variable=self.profile_compute_var).pack(side="left")
 
+    rec = ttk.LabelFrame(box, text="Record session")
+    rec.grid(row=3, column=0, columnspan=2, sticky="ew", padx=4, pady=4)
+    rec.columnconfigure(1, weight=1)
+    ttk.Label(rec, text="Output").grid(row=0, column=0, sticky="w", padx=4, pady=2)
+    ttk.Entry(rec, textvariable=self.record_path_var).grid(row=0, column=1, sticky="ew", padx=4, pady=2)
+    ttk.Button(rec, text="Browse", command=self._browse_record_path).grid(row=0, column=2, sticky="w", padx=4)
+    ttk.Checkbutton(
+      rec,
+      text="Record session (window + mic → MP4)",
+      variable=self.record_enabled,
+      command=self._toggle_recording,
+    ).grid(row=1, column=0, columnspan=3, sticky="w", padx=4, pady=2)
+
     mod = ttk.LabelFrame(box, text="Modality dropout (while running)")
-    mod.grid(row=3, column=0, columnspan=2, sticky="ew", padx=4, pady=4)
+    mod.grid(row=4, column=0, columnspan=2, sticky="ew", padx=4, pady=4)
     ttk.Checkbutton(
       mod,
       text="Camera modality enabled",
@@ -1259,21 +1480,21 @@ class JetsonGuiApp:
       self.radar1_instance_cb.state(["disabled"])
       self.radar2_instance_cb.state(["disabled"])
 
-    ttk.Label(box, text="Dropout state").grid(row=4, column=0, sticky="w", padx=6, pady=3)
-    ttk.Label(box, textvariable=self.dropout_var, wraplength=340).grid(row=4, column=1, sticky="w", padx=6, pady=3)
-    ttk.Label(box, text="Audio verify").grid(row=5, column=0, sticky="w", padx=6, pady=3)
-    ttk.Label(box, textvariable=self.audio_verify_var, wraplength=340).grid(row=5, column=1, sticky="w", padx=6, pady=3)
-    ttk.Label(box, text="Run status").grid(row=6, column=0, sticky="w", padx=6, pady=3)
-    ttk.Label(box, textvariable=self.status_var, wraplength=340).grid(row=6, column=1, sticky="w", padx=6, pady=3)
-    ttk.Label(box, text="Latency").grid(row=7, column=0, sticky="w", padx=6, pady=3)
-    ttk.Label(box, textvariable=self.latency_var).grid(row=7, column=1, sticky="w", padx=6, pady=3)
-    ttk.Label(box, text="Range").grid(row=8, column=0, sticky="w", padx=6, pady=3)
-    ttk.Label(box, textvariable=self.range_var).grid(row=8, column=1, sticky="w", padx=6, pady=3)
-    ttk.Label(box, text="Radar").grid(row=9, column=0, sticky="w", padx=6, pady=3)
-    ttk.Label(box, textvariable=self.radar_status_var, wraplength=340).grid(row=9, column=1, sticky="w", padx=6, pady=3)
-    ttk.Label(box, text="Raw / conf").grid(row=10, column=0, sticky="w", padx=6, pady=3)
-    ttk.Label(box, textvariable=self.raw_var).grid(row=10, column=1, sticky="w", padx=6, pady=3)
-    ttk.Label(box, textvariable=self.conf_var).grid(row=10, column=2, sticky="w", padx=6, pady=3)
+    ttk.Label(box, text="Dropout state").grid(row=5, column=0, sticky="w", padx=6, pady=3)
+    ttk.Label(box, textvariable=self.dropout_var, wraplength=340).grid(row=5, column=1, sticky="w", padx=6, pady=3)
+    ttk.Label(box, text="Audio verify").grid(row=6, column=0, sticky="w", padx=6, pady=3)
+    ttk.Label(box, textvariable=self.audio_verify_var, wraplength=340).grid(row=6, column=1, sticky="w", padx=6, pady=3)
+    ttk.Label(box, text="Run status").grid(row=7, column=0, sticky="w", padx=6, pady=3)
+    ttk.Label(box, textvariable=self.status_var, wraplength=340).grid(row=7, column=1, sticky="w", padx=6, pady=3)
+    ttk.Label(box, text="Latency").grid(row=8, column=0, sticky="w", padx=6, pady=3)
+    ttk.Label(box, textvariable=self.latency_var).grid(row=8, column=1, sticky="w", padx=6, pady=3)
+    ttk.Label(box, text="Range").grid(row=9, column=0, sticky="w", padx=6, pady=3)
+    ttk.Label(box, textvariable=self.range_var).grid(row=9, column=1, sticky="w", padx=6, pady=3)
+    ttk.Label(box, text="Radar").grid(row=10, column=0, sticky="w", padx=6, pady=3)
+    ttk.Label(box, textvariable=self.radar_status_var, wraplength=340).grid(row=10, column=1, sticky="w", padx=6, pady=3)
+    ttk.Label(box, text="Raw / conf").grid(row=11, column=0, sticky="w", padx=6, pady=3)
+    ttk.Label(box, textvariable=self.raw_var).grid(row=11, column=1, sticky="w", padx=6, pady=3)
+    ttk.Label(box, textvariable=self.conf_var).grid(row=11, column=2, sticky="w", padx=6, pady=3)
 
     probs_box = ttk.LabelFrame(parent, text="Fused class probs")
     probs_box.grid(row=1, column=0, columnspan=3, sticky="nsew")
@@ -1487,6 +1708,116 @@ class JetsonGuiApp:
     except ValueError:
       self.status_var.set("invalid threshold / range")
 
+  def _browse_record_path(self):
+    path = filedialog.asksaveasfilename(
+      title="Select recording file",
+      defaultextension=".mp4",
+      filetypes=[("Video", "*.mp4 *.gif"), ("MP4", "*.mp4"), ("GIF", "*.gif")],
+    )
+    if path:
+      self.record_path_var.set(path)
+
+  def _toggle_recording(self):
+    if self.record_enabled.get():
+      self._start_recording_if_needed()
+      self.worker.set_recording_active(True)
+      self.worker.set_audio_device(
+        self._audio_index_from_var(),
+        input_enabled=self.audio_device_var.get().strip() != "(none)",
+      )
+      if not self.worker.audio_buffer.running:
+        self.worker.audio_buffer.start(device=self._audio_index_from_var())
+      self.worker.audio_buffer.start_recording_sink()
+      self.recorder.sync_audio_cursor(self.worker.audio_buffer.snapshot())
+      err = self.worker.audio_buffer.last_error
+      if err:
+        self.status_var.set(f"recording (mic failed: {err})")
+    else:
+      mic = self.worker.audio_buffer.stop_recording_sink()
+      if mic.size == 0:
+        mic = self.worker.audio_buffer.snapshot()
+      note = self.recorder.stop(audio_wave=mic)
+      self.worker.set_recording_active(False)
+      if note:
+        self.status_var.set(note)
+      elif self.recorder.last_error:
+        self.status_var.set(f"record stop: {self.recorder.last_error}")
+
+  def _start_recording_if_needed(self):
+    if not self.record_enabled.get():
+      return
+    if self.recorder.enabled:
+      return
+    path = Path(self.record_path_var.get())
+    sr = int(getattr(self.worker, "audio_sample_rate", 16000) or 16000)
+    try:
+      self.recorder.start(path, fps=8.0, audio_sample_rate=sr, capture_audio=True)
+      self.recorder.sync_audio_cursor(self.worker.audio_buffer.snapshot())
+      self.status_var.set(f"recording → {path.name} (mic on)")
+    except Exception as exc:
+      gif_path = path.with_suffix(".gif")
+      try:
+        self.recorder.start(gif_path, fps=8.0, audio_sample_rate=sr, capture_audio=False)
+        self.record_path_var.set(str(gif_path))
+        self.status_var.set(f"MP4 needs ffmpeg; recording GIF → {gif_path.name} (no audio)")
+      except Exception as exc2:
+        self.record_enabled.set(False)
+        self.status_var.set(f"Record failed: {exc2} (install ffmpeg for MP4)")
+
+  def _compose_session_frame(self, state: dict[str, Any]) -> np.ndarray:
+    """Fallback when ImageGrab is unavailable (common on Jetson / headless X)."""
+    cam = np.asarray(state.get("camera_rgb"), dtype=np.uint8)
+    rad = np.asarray(state.get("radar_rgb"), dtype=np.uint8)
+    aud = np.asarray(state.get("audio_rgb"), dtype=np.uint8) if self.worker.enable_audio else None
+    if cam.ndim != 3:
+      cam = np.zeros((240, 320, 3), dtype=np.uint8)
+    if rad.ndim != 3:
+      rad = np.zeros((160, 240, 3), dtype=np.uint8)
+    h = 480
+    w = 860
+    canvas = Image.new("RGB", (w, h), (28, 28, 28))
+    draw = ImageDraw.Draw(canvas)
+    cam_img = Image.fromarray(cam).resize((420, 280))
+    rad_img = Image.fromarray(rad).resize((400, 220))
+    canvas.paste(cam_img, (16, 48))
+    canvas.paste(rad_img, (448, 48))
+    if aud is not None and aud.ndim == 3:
+      aud_img = Image.fromarray(aud).resize((400, 140))
+      canvas.paste(aud_img, (448, 290))
+    pred = str(state.get("prediction", "-"))
+    conf = float(state.get("confidence", 0.0))
+    draw.text((16, 12), f"JetsonCA  pred={pred}  conf={conf:.2f}", fill=(230, 230, 230))
+    draw.text((16, 340), str(state.get("status", ""))[:90], fill=(180, 180, 180))
+    draw.text((16, 370), str(state.get("audio_verify_text", ""))[:90], fill=(160, 200, 160))
+    draw.text((16, 400), f"REC frames={self.recorder.frame_count}", fill=(220, 120, 120))
+    return np.asarray(canvas, dtype=np.uint8)
+
+  def _capture_window(self, state: dict[str, Any] | None = None):
+    if not self.recorder.enabled:
+      return
+    self.root.update_idletasks()
+    x = self.root.winfo_rootx()
+    y = self.root.winfo_rooty()
+    w = self.root.winfo_width()
+    h = self.root.winfo_height()
+    frame = None
+    try:
+      from PIL import ImageGrab
+
+      frame = np.array(ImageGrab.grab(bbox=(x, y, x + w, y + h)).convert("RGB"))
+    except Exception:
+      if state is not None:
+        frame = self._compose_session_frame(state)
+      else:
+        frame = self._compose_session_frame(self.worker.get_state())
+    try:
+      self.recorder.add(frame)
+      self.recorder.add_audio_snapshot(self.worker.audio_buffer.snapshot())
+    except Exception as exc:
+      if self.recorder.last_error != str(exc):
+        self.recorder.last_error = str(exc)
+        self.status_var.set(f"Record grab failed: {exc}")
+
   def start(self):
     if self.worker_thread is not None and self.worker_thread.is_alive():
       return
@@ -1513,7 +1844,8 @@ class JetsonGuiApp:
     except ValueError:
       pass
     audio_on = self.audio_enabled_var.get() and self.audio_device_var.get().strip() != "(none)"
-    input_on = self.worker.enable_audio and self.audio_device_var.get().strip() != "(none)"
+    recording = bool(self.record_enabled.get())
+    input_on = (self.worker.enable_audio and self.audio_device_var.get().strip() != "(none)") or recording
     self.worker.set_audio_device(self._audio_index_from_var(), input_enabled=input_on)
     if not audio_on:
       self.audio_enabled_var.set(False)
@@ -1523,10 +1855,25 @@ class JetsonGuiApp:
     self.worker_thread = threading.Thread(target=self.worker.run, daemon=True)
     self.worker_thread.start()
     self.status_var.set("starting…")
+    if recording:
+      self.worker.set_recording_active(True)
+      if not self.worker.audio_buffer.running:
+        self.worker.audio_buffer.start(device=self._audio_index_from_var())
+      self.worker.audio_buffer.start_recording_sink()
+      self._start_recording_if_needed()
+      self.recorder.sync_audio_cursor(self.worker.audio_buffer.snapshot())
 
   def stop(self):
     if self.worker_thread is not None and self.worker_thread.is_alive():
       self.worker.stop()
+    mic = self.worker.audio_buffer.stop_recording_sink()
+    if mic.size == 0:
+      mic = self.worker.audio_buffer.snapshot()
+    note = self.recorder.stop(audio_wave=mic)
+    self.worker.set_recording_active(False)
+    self.record_enabled.set(False)
+    if note:
+      self.status_var.set(note)
 
   def _run_gui_benchmark(self):
     notebook = getattr(self, "_control_notebook", None)
@@ -1630,6 +1977,12 @@ class JetsonGuiApp:
       aud_size = (max(240, self.audio_label.winfo_width()), max(120, self.audio_label.winfo_height()))
       self._set_image(self.audio_label, state["audio_rgb"], "audio_photo", aud_size, letterbox=False)
 
+    if self.recorder.enabled:
+      status = str(state["status"])
+      if "REC" not in status:
+        self.status_var.set(f"{status} | REC {self.recorder.frame_count} fr")
+      self._capture_window(state)
+
     self.root.after(100, self._refresh_ui)
 
   def on_close(self):
@@ -1691,13 +2044,22 @@ def parse_args():
                  help="Allow predictions even when radar peak is outside min/max range")
   p.add_argument("--min-range-m", type=float, default=0.3)
   p.add_argument("--max-range-m", type=float, default=2.5)
+  p.add_argument(
+    "--record",
+    type=Path,
+    default=None,
+    help="Default session recording path (MP4). Enable via GUI checkbox.",
+  )
   return p.parse_args()
 
 
 def main():
   args = parse_args()
   apply_jetson_runtime_tweaks()
-  JetsonGuiApp(args).run()
+  app = JetsonGuiApp(args)
+  if args.record is not None:
+    app.record_path_var.set(str(args.record))
+  app.run()
 
 
 if __name__ == "__main__":

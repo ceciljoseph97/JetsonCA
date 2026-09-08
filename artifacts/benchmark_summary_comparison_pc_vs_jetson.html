@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>AI-DISCO — PC RTX 5090 vs Jetson Orin live profile</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 24px;
+      color: #111827;
+      background: #ffffff;
+    }
+    h1, h2 { margin: 0 0 12px 0; }
+    p { margin: 6px 0; line-height: 1.45; }
+    .muted { color: #6b7280; font-size: 14px; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin: 18px 0 22px;
+    }
+    .grid2 {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+      margin: 18px 0 22px;
+    }
+    .card {
+      border: 1px solid #d1d5db;
+      border-radius: 10px;
+      padding: 14px;
+      background: #fafafa;
+    }
+    .stat { font-size: 28px; font-weight: 700; margin-bottom: 4px; }
+    .stat-sm { font-size: 22px; font-weight: 700; margin-bottom: 4px; }
+    .label { font-size: 13px; color: #4b5563; }
+    .section { margin-top: 28px; }
+    table {
+      border-collapse: collapse;
+      width: 100%;
+      margin-top: 10px;
+      font-size: 14px;
+    }
+    th, td {
+      border: 1px solid #d1d5db;
+      padding: 8px 10px;
+      text-align: left;
+    }
+    th { background: #f3f4f6; }
+    td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+    .pill {
+      display: inline-block;
+      padding: 3px 8px;
+      border-radius: 999px;
+      font-size: 12px;
+      background: #e5e7eb;
+      margin-right: 4px;
+    }
+    .green { background: #dcfce7; }
+    .blue { background: #dbeafe; }
+    .orange { background: #ffedd5; }
+    .purple { background: #ede9fe; }
+    svg text {
+      font-family: Arial, sans-serif;
+      fill: #111827;
+      font-size: 12px;
+    }
+    .legend span {
+      display: inline-block;
+      margin-right: 14px;
+      font-size: 13px;
+    }
+    .swatch {
+      width: 10px;
+      height: 10px;
+      display: inline-block;
+      margin-right: 6px;
+      border-radius: 2px;
+    }
+    code { font-size: 12px; }
+    .win { color: #166534; font-weight: 700; }
+    .lose { color: #9a3412; }
+</style>
+</head>
+<body>
+  <h1>Overall comparison — PC (RTX 5090) vs Jetson Orin</h1>
+  <p class="muted">
+    Same live 3-modality pipeline (1 cam + dual radar + mic), same ~4777 MMAC architecture.
+    Sources:
+    <code>Crossattention/artifacts/benchmark_profile.json</code>
+    (2026-09-08) ·
+    <code>JetsonCA/artifacts/benchmark_profile.json</code>
+    (2026-09-07).
+  </p>
+  <p>
+    <span class="pill blue">PC AngelaPC170 · RTX 5090</span>
+    <span class="pill orange">Jetson cj-desktop · Orin</span>
+    <span class="pill green">live_both</span>
+    <span class="pill">30 runs / 10 warmup</span>
+  </p>
+
+  <div class="grid">
+    <div class="card">
+      <div class="stat">3.74×</div>
+      <div class="label">Forward speedup (Jetson mean / PC mean)</div>
+    </div>
+    <div class="card">
+      <div class="stat">3.74×</div>
+      <div class="label">Inferences/s ratio (PC / Jetson)</div>
+    </div>
+    <div class="card">
+      <div class="stat">3.74×</div>
+      <div class="label">Achieved GFLOP/s ratio</div>
+    </div>
+    <div class="card">
+      <div class="stat">~same</div>
+      <div class="label">Model size · 2.88 M params · 11.0 MB</div>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>Platforms</h2>
+    <table>
+      <thead>
+        <tr><th></th><th>PC</th><th>Jetson Orin</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Host</td><td>AngelaPC170</td><td>cj-desktop</td></tr>
+        <tr><td>OS</td><td>Windows-11-10.0.26200-SP0</td><td>Linux-5.15.148-tegra-aarch64-with-glibc2.35</td></tr>
+        <tr><td>GPU</td><td>NVIDIA GeForce RTX 5090 · 31.8 GB</td><td>Orin · 7.4 GB</td></tr>
+        <tr><td>Python / torch</td><td>3.12.13 / 2.11.0+cu128</td><td>3.10.20 / 2.10.0</td></tr>
+        <tr><td>Checkpoint</td><td><code>walking_clp_bg_audio_v1</code> (clapping/walking)</td><td><code>walking_bg_audio_v1</code> (walking)</td></tr>
+        <tr><td>Radar rate</td><td>3.0 Hz · fuse dual_mean</td><td>5.0 Hz · fuse dual_none</td></tr>
+      </tbody>
+    </table>
+    <p class="muted">Ckpts differ slightly (head class count) but compute graph / MACs match to &lt;0.01%.</p>
+  </div>
+
+  <div class="section">
+    <h2>Headline compute</h2>
+    <table>
+      <thead>
+        <tr><th>Metric</th><th class="num">PC</th><th class="num">Jetson</th><th>Note</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Forward mean (ms)</td><td class="num win">25.46</td><td class="num lose">95.27</td><td>3.74× faster on PC</td></tr>
+        <tr><td>Forward p50 (ms)</td><td class="num win">24.68</td><td class="num lose">94.88</td><td></td></tr>
+        <tr><td>Forward p95 (ms)</td><td class="num win">29.48</td><td class="num lose">108.65</td><td></td></tr>
+        <tr><td>Forward max (ms)</td><td class="num win">34.99</td><td class="num lose">110.21</td><td></td></tr>
+        <tr><td>Inferences / s</td><td class="num win">39.3</td><td class="num lose">10.5</td><td></td></tr>
+        <tr><td>Achieved GFLOP/s</td><td class="num win">375.3</td><td class="num lose">100.3</td><td></td></tr>
+        <tr><td>Achieved GMAC/s</td><td class="num win">187.6</td><td class="num lose">50.1</td><td></td></tr>
+        <tr><td>MACs / forward</td><td class="num">4777.4 M</td><td class="num">4777.4 M</td><td>matched arch</td></tr>
+        <tr><td>Params</td><td class="num">2.8817 M</td><td class="num">2.8815 M</td><td>tiny head delta</td></tr>
+      </tbody>
+    </table>
+    <svg width="980" height="70" viewBox="0 0 980 70" role="img" aria-label="Forward latency bars">
+      <text x="0" y="22">Forward mean</text>
+      <rect x="160" y="8" width="162.7" height="14" fill="#2563eb" />
+      <text x="330.7" y="20">PC 25.5 ms</text>
+      <rect x="160" y="34" width="608.7" height="14" fill="#ea580c" />
+      <text x="776.7" y="46">Jetson 95.3 ms</text>
+    </svg>
+  </div>
+
+  <div class="section">
+    <h2>Pipeline stage means (PC blue / Jetson orange)</h2>
+    <div class="legend">
+      <span><span class="swatch" style="background:#2563eb;"></span>PC RTX 5090</span>
+      <span><span class="swatch" style="background:#ea580c;"></span>Jetson Orin</span>
+    </div>
+    <svg width="980" height="300" viewBox="0 0 980 300" role="img" aria-label="Stage comparison">
+      <text x="220" y="18">0</text>
+<text x="316" y="18">50</text>
+<text x="412" y="18">100</text>
+<text x="507" y="18">150</text>
+<text x="603" y="18">200</text>
+<text x="699" y="18">250</text>
+<text x="795" y="18">300</text>
+<text x="891" y="18">350</text>
+<text x="940" y="18">ms</text>
+<text x="0" y="52">Forward mean</text>
+<rect x="220" y="40" width="48.8" height="10" fill="#2563eb" />
+<text x="274.8" y="49" style="font-size:11px">25.5</text>
+<rect x="220" y="54" width="182.6" height="10" fill="#ea580c" />
+<text x="408.6" y="63" style="font-size:11px">95.3</text>
+<text x="0" y="94">Forward p95</text>
+<rect x="220" y="82" width="56.5" height="10" fill="#2563eb" />
+<text x="282.5" y="91" style="font-size:11px">29.5</text>
+<rect x="220" y="96" width="208.2" height="10" fill="#ea580c" />
+<text x="434.2" y="105" style="font-size:11px">108.7</text>
+<text x="0" y="136">Total loop</text>
+<rect x="220" y="124" width="636.4" height="10" fill="#2563eb" />
+<text x="862.4" y="133" style="font-size:11px">332.0</text>
+<rect x="220" y="138" width="382.8" height="10" fill="#ea580c" />
+<text x="608.8" y="147" style="font-size:11px">199.7</text>
+<text x="0" y="178">Radar capture</text>
+<rect x="220" y="166" width="600.9" height="10" fill="#2563eb" />
+<text x="826.9" y="175" style="font-size:11px">313.5</text>
+<rect x="220" y="180" width="260.2" height="10" fill="#ea580c" />
+<text x="486.2" y="189" style="font-size:11px">135.8</text>
+<text x="0" y="220">Audio mel</text>
+<rect x="220" y="208" width="23.2" height="10" fill="#2563eb" />
+<text x="249.2" y="217" style="font-size:11px">12.1</text>
+<rect x="220" y="222" width="68.5" height="10" fill="#ea580c" />
+<text x="294.5" y="231" style="font-size:11px">35.7</text>
+<text x="0" y="262">Cam preprocess</text>
+<rect x="220" y="250" width="2.6" height="10" fill="#2563eb" />
+<text x="228.6" y="259" style="font-size:11px">1.4</text>
+<rect x="220" y="264" width="15.5" height="10" fill="#ea580c" />
+<text x="241.5" y="273" style="font-size:11px">8.1</text>
+    </svg>
+    <table>
+      <thead>
+        <tr><th>Stage</th><th class="num">PC mean</th><th class="num">Jetson mean</th><th class="num">Ratio J/PC</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Forward mean</td><td class='num'>25.46</td><td class='num'>95.27</td><td class='num'>3.74</td></tr><tr><td>Forward p95</td><td class='num'>29.48</td><td class='num'>108.65</td><td class='num'>3.69</td></tr><tr><td>Total loop</td><td class='num'>332.03</td><td class='num'>199.74</td><td class='num'>0.60</td></tr><tr><td>Radar capture</td><td class='num'>313.51</td><td class='num'>135.77</td><td class='num'>0.43</td></tr><tr><td>Audio mel</td><td class='num'>12.11</td><td class='num'>35.73</td><td class='num'>2.95</td></tr><tr><td>Cam preprocess</td><td class='num'>1.35</td><td class='num'>8.07</td><td class='num'>5.97</td></tr>
+      </tbody>
+    </table>
+    <p class="muted">
+      Loop times are dominated by radar cadence (3.0 Hz on PC,
+      5.0 Hz on Jetson), not by the forward. Model headroom on PC is large;
+      Orin still clears real-time at the 5 Hz radar rate (~200 ms budget vs 95 ms forward).
+    </p>
+  </div>
+
+  <div class="section">
+    <h2>Memory &amp; resource</h2>
+    <table>
+      <thead>
+        <tr><th>Metric</th><th class="num">PC</th><th class="num">Jetson</th><th>Note</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Weight memory (MB)</td><td class="num">11.00</td><td class="num">11.00</td><td>matched</td></tr>
+        <tr><td>Input window est (MB)</td><td class="num">5.48</td><td class="num">5.48</td><td>matched</td></tr>
+        <tr><td>Process RSS mean (MB)</td><td class="num">1614</td><td class="num">1451</td><td>CUDA+SDK+Python</td></tr>
+        <tr><td>System RAM used mean (MB)</td><td class="num">28205</td><td class="num">3104</td><td>host load differs</td></tr>
+        <tr><td>Process CPU mean %</td><td class="num">775</td><td class="num">52</td><td>Windows counts threads aggregated</td></tr>
+        <tr><td>System CPU avg %</td><td class="num">39.1</td><td class="num">22.2</td><td></td></tr>
+        <tr><td>CUDA alloc mean (MB)</td><td class="num">35.0</td><td class="num">n/a</td><td>Jetson used tegrastats GR3D instead</td></tr>
+        <tr><td>GR3D util mean %</td><td class="num">n/a</td><td class="num">17.2</td><td>Orin GPU busy mean; peak 99%</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="section">
+    <h2>Takeaways</h2>
+    <div class="grid2">
+      <div class="card">
+        <div class="stat-sm">PC = throughput</div>
+        <div class="label">
+          ~39 inf/s · 25.5 ms forward · 375 GFLOP/s.
+          Fine for GUI + ablation + recording with headroom.
+        </div>
+      </div>
+      <div class="card">
+        <div class="stat-sm">Orin = edge real-time</div>
+        <div class="label">
+          ~10.5 inf/s · 95.3 ms forward still fits a
+          5.0 Hz radar loop (~200 ms).
+          Deployment target for embedded multimodal HAR.
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

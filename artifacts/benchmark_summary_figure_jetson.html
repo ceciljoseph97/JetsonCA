@@ -1,0 +1,465 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>AI-DISCO Jetson Orin — live 3-mod profile</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 24px;
+      color: #111827;
+      background: #ffffff;
+    }
+    h1, h2 { margin: 0 0 12px 0; }
+    p { margin: 6px 0; line-height: 1.45; }
+    .muted { color: #6b7280; font-size: 14px; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin: 18px 0 22px;
+    }
+    .grid3 {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+      margin: 18px 0 22px;
+    }
+    .card {
+      border: 1px solid #d1d5db;
+      border-radius: 10px;
+      padding: 14px;
+      background: #fafafa;
+    }
+    .stat { font-size: 28px; font-weight: 700; margin-bottom: 4px; }
+    .label { font-size: 13px; color: #4b5563; }
+    .section { margin-top: 28px; }
+    table {
+      border-collapse: collapse;
+      width: 100%;
+      margin-top: 10px;
+      font-size: 14px;
+    }
+    th, td {
+      border: 1px solid #d1d5db;
+      padding: 8px 10px;
+      text-align: left;
+    }
+    th { background: #f3f4f6; }
+    td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+    .pill {
+      display: inline-block;
+      padding: 3px 8px;
+      border-radius: 999px;
+      font-size: 12px;
+      background: #e5e7eb;
+      margin-right: 4px;
+    }
+    .green { background: #dcfce7; }
+    .blue { background: #dbeafe; }
+    .orange { background: #ffedd5; }
+    svg text {
+      font-family: Arial, sans-serif;
+      fill: #111827;
+      font-size: 12px;
+    }
+    .legend span {
+      display: inline-block;
+      margin-right: 14px;
+      font-size: 13px;
+    }
+    .swatch {
+      width: 10px;
+      height: 10px;
+      display: inline-block;
+      margin-right: 6px;
+      border-radius: 2px;
+    }
+    code { font-size: 12px; }
+  </style>
+</head>
+<body>
+  <h1>Jetson Orin live profile — camera + dual radar + mic</h1>
+  <p class="muted">
+    <code>artifacts/benchmark_profile.json</code>
+    · 2026-09-07 13:14 UTC · cj-desktop · Linux 5.15 tegra aarch64
+    · GPU Orin 7619.8 MB · CUDA · Python 3.10.20 · torch 2.10.0
+  </p>
+  <p>
+    <span class="pill orange">memory</span>
+    <span class="pill blue">resource</span>
+    <span class="pill green">compute</span>
+    <span class="pill">source live</span>
+    <span class="pill">mode live_both</span>
+    <span class="pill">window 30 · batch 1 · 30 runs / 10 warmup</span>
+  </p>
+  <p class="muted">
+    Ckpt <code>walking_bg_audio_v1/best_multimodal_crossattention.pt</code>
+    · labels walking / background · model_dim 128 · 4 heads · 2 layers
+    · temporal transformer · audio 16 kHz, 32 mels × 32 · dual_radar_fuse none
+    · reliability gates + detect + human heads.
+  </p>
+
+  <div class="grid">
+    <div class="card">
+      <div class="stat">95.3 ms</div>
+      <div class="label">Forward mean · p50 94.9 · p95 108.7 · σ 8.5</div>
+    </div>
+    <div class="card">
+      <div class="stat">10.5</div>
+      <div class="label">Inferences / s (1000 / mean)</div>
+    </div>
+    <div class="card">
+      <div class="stat">199.7 ms</div>
+      <div class="label">Full loop mean · p95 226 · min 167 · max 233</div>
+    </div>
+    <div class="card">
+      <div class="stat">100.3</div>
+      <div class="label">Achieved GFLOP/s on the forward</div>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>Sensors in this capture</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Stream</th>
+          <th>present</th>
+          <th>Device / config</th>
+          <th>Tensor</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Camera</td>
+          <td>true</td>
+          <td>index 0 · 640×480 @ 15 FPS request</td>
+          <td>[1, 30, 3, 112, 112]</td>
+        </tr>
+        <tr>
+          <td>Radar 1 + 2</td>
+          <td>true</td>
+          <td>profile safe · 5 Hz · 3 RX · both live, not mirrored · fuse dual_none</td>
+          <td>[1, 30, 3, 32, 32] × 2 encoders</td>
+        </tr>
+        <tr>
+          <td>Audio</td>
+          <td>true · live_mic</td>
+          <td>alsa_input.usb-Microsoft_Microsoft___LifeCam_HD-5000-02.mono-fallback</td>
+          <td>mel patches 32×32, 30 steps, 16 kHz wave</td>
+        </tr>
+      </tbody>
+    </table>
+    <p class="muted">fusion_meta_last: radar1=ok/live radar2=ok/live · degraded=false</p>
+  </div>
+
+  <div class="section">
+    <h2>Compute — forward latency distribution</h2>
+    <p class="muted">Model-only, CUDA sync around the forward. 30 measured windows after 10 warmup.</p>
+    <svg width="980" height="90" viewBox="0 0 980 90" role="img" aria-label="Latency range">
+      <text x="80" y="18">80</text>
+      <text x="305" y="18">90</text>
+      <text x="530" y="18">100</text>
+      <text x="755" y="18">110 ms</text>
+      <rect x="80" y="36" width="675" height="18" fill="#fed7aa" />
+      <line x1="85" y1="36" x2="85" y2="54" stroke="#9a3412" />
+      <line x1="755" y1="36" x2="755" y2="54" stroke="#9a3412" />
+      <rect x="413" y="32" width="196" height="26" fill="#ea580c" />
+      <line x1="414" y1="28" x2="414" y2="62" stroke="#111827" stroke-width="2" />
+      <text x="80" y="78">min 80.2</text>
+      <text x="300" y="78">mean 95.3  p50 94.9</text>
+      <text x="530" y="78">p95 108.7  p99 110.0</text>
+      <text x="800" y="78">max 110.2</text>
+    </svg>
+    <table>
+      <thead>
+        <tr>
+          <th>Metric</th>
+          <th class="num">Value</th>
+          <th>Note</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td>MACs / forward</td><td class="num">4.777 × 10⁹</td><td>4777.4 MMACs</td></tr>
+        <tr><td>FLOPs / forward</td><td class="num">9.555 × 10⁹</td><td>2 × MACs (mul-add)</td></tr>
+        <tr><td>Achieved</td><td class="num">50.15 GMAC/s · 100.3 GFLOP/s</td><td>theoretical ops / mean latency</td></tr>
+        <tr><td>Conv2d throughput</td><td class="num">49.38 GMAC/s</td><td>4704.6 MMACs in 95.3 ms</td></tr>
+        <tr><td>Temporal throughput</td><td class="num">0.25 GMAC/s</td><td>24.05 MMACs in 95.3 ms</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="section">
+    <h2>Compute — MACs by block and op</h2>
+    <div class="legend">
+      <span><span class="swatch" style="background:#2563eb;"></span>Camera conv 3793 (79.4%)</span>
+      <span><span class="swatch" style="background:#ea580c;"></span>Dual radar conv 619 (13.0%)</span>
+      <span><span class="swatch" style="background:#16a34a;"></span>Audio conv 292 (6.1%)</span>
+      <span><span class="swatch" style="background:#8b5cf6;"></span>xattn 48.6 · temp 24.1 · head 0.2</span>
+    </div>
+    <svg width="980" height="70" viewBox="0 0 980 70" role="img" aria-label="MAC share">
+      <rect x="0" y="8" width="778" height="26" fill="#2563eb" />
+      <rect x="778" y="8" width="127" height="26" fill="#ea580c" />
+      <rect x="905" y="8" width="60" height="26" fill="#16a34a" />
+      <rect x="965" y="8" width="15" height="26" fill="#8b5cf6" />
+      <text x="0" y="54">Op mix: conv2d 4704.6 MMACs · linear 39.5 · multihead_attention 33.3</text>
+    </svg>
+    <table>
+      <thead>
+        <tr>
+          <th>Block</th>
+          <th class="num">MMACs</th>
+          <th class="num">Share</th>
+          <th class="num">GFLOP</th>
+          <th class="num">Params</th>
+          <th class="num">Weight MB</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td>Conv camera</td><td class="num">3793.3</td><td class="num">79.4%</td><td class="num">7.59</td><td class="num">93.7 k</td><td class="num">0.36</td></tr>
+        <tr><td>Conv dual radar</td><td class="num">619.3</td><td class="num">13.0%</td><td class="num">1.24</td><td class="num">187 k</td><td class="num">0.71</td></tr>
+        <tr><td>Conv audio</td><td class="num">292.0</td><td class="num">6.1%</td><td class="num">0.58</td><td class="num">93.1 k</td><td class="num">0.36</td></tr>
+        <tr><td>Temporal radar×2</td><td class="num">12.03</td><td class="num">0.25%</td><td class="num">0.024</td><td class="num">397 k</td><td class="num">1.51</td></tr>
+        <tr><td>Temporal camera</td><td class="num">6.01</td><td class="num">0.13%</td><td class="num">0.012</td><td class="num">198 k</td><td class="num">0.76</td></tr>
+        <tr><td>Temporal audio</td><td class="num">6.01</td><td class="num">0.13%</td><td class="num">0.012</td><td class="num">198 k</td><td class="num">0.76</td></tr>
+        <tr><td>Cross-attention</td><td class="num">48.57</td><td class="num">1.02%</td><td class="num">0.097</td><td class="num">1.59 M</td><td class="num">6.05</td></tr>
+        <tr><td>Head</td><td class="num">0.20</td><td class="num">&lt;0.1%</td><td class="num">0.0004</td><td class="num">102 k</td><td class="num">0.39</td></tr>
+        <tr>
+          <td><b>Total</b></td>
+          <td class="num"><b>4777.4</b></td>
+          <td class="num">100%</td>
+          <td class="num"><b>9.55</b></td>
+          <td class="num"><b>2.8815 M</b></td>
+          <td class="num"><b>11.00</b></td>
+        </tr>
+      </tbody>
+    </table>
+    <p class="muted">
+      Temporal split: attn 8.33 MMACs + FFN 15.73 MMACs. Linear layers nested under
+      MultiheadAttention are not double-counted. Encoders still run on gated-off
+      modalities (no early-skip).
+    </p>
+  </div>
+
+  <div class="section">
+    <h2>Live pipeline timing</h2>
+    <p class="muted">
+      Radar/camera/audio_mel rows include window-fill continues (n=98 / 69 / 40).
+      Inference and total_loop are the 30 measured forwards only.
+    </p>
+    <svg width="980" height="250" viewBox="0 0 980 250" role="img" aria-label="Pipeline timing">
+      <text x="200" y="18">0</text>
+      <text x="380" y="18">50</text>
+      <text x="560" y="18">100</text>
+      <text x="740" y="18">150</text>
+      <text x="900" y="18">200 ms</text>
+
+      <text x="0" y="64">Radar capture</text>
+      <rect x="200" y="48" width="489" height="18" fill="#ea580c" />
+      <text x="698" y="62">135.8</text>
+
+      <text x="0" y="99">Audio mel (CPU)</text>
+      <rect x="200" y="83" width="129" height="18" fill="#16a34a" />
+      <text x="338" y="97">35.7</text>
+
+      <text x="0" y="134">Model forward</text>
+      <rect x="200" y="118" width="343" height="18" fill="#2563eb" />
+      <text x="552" y="132">95.3</text>
+
+      <text x="0" y="169">Camera preprocess</text>
+      <rect x="200" y="153" width="29" height="18" fill="#7c3aed" />
+      <text x="238" y="167">8.1</text>
+
+      <text x="0" y="204">Total loop</text>
+      <rect x="200" y="188" width="719" height="18" fill="#111827" />
+      <text x="928" y="202">199.7</text>
+    </svg>
+    <table>
+      <thead>
+        <tr>
+          <th>Stage</th>
+          <th class="num">n</th>
+          <th class="num">mean</th>
+          <th class="num">std</th>
+          <th class="num">min</th>
+          <th class="num">p50</th>
+          <th class="num">p95</th>
+          <th class="num">max</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>radar_capture_ms</td>
+          <td class="num">98</td>
+          <td class="num">135.8</td>
+          <td class="num">70.5</td>
+          <td class="num">8.5</td>
+          <td class="num">186.6</td>
+          <td class="num">201.4</td>
+          <td class="num">202.7</td>
+        </tr>
+        <tr>
+          <td>radar_fuse_ms</td>
+          <td class="num">98</td>
+          <td class="num">0.021</td>
+          <td class="num">0.006</td>
+          <td class="num">0.013</td>
+          <td class="num">0.021</td>
+          <td class="num">0.028</td>
+          <td class="num">0.056</td>
+        </tr>
+        <tr>
+          <td>camera_fetch_preprocess_ms</td>
+          <td class="num">69</td>
+          <td class="num">8.07</td>
+          <td class="num">1.85</td>
+          <td class="num">5.06</td>
+          <td class="num">8.04</td>
+          <td class="num">11.6</td>
+          <td class="num">12.3</td>
+        </tr>
+        <tr>
+          <td>audio_mel_ms</td>
+          <td class="num">40</td>
+          <td class="num">35.7</td>
+          <td class="num">4.82</td>
+          <td class="num">25.3</td>
+          <td class="num">36.6</td>
+          <td class="num">44.0</td>
+          <td class="num">46.5</td>
+        </tr>
+        <tr>
+          <td>inference_ms</td>
+          <td class="num">30</td>
+          <td class="num">95.3</td>
+          <td class="num">8.54</td>
+          <td class="num">80.2</td>
+          <td class="num">94.9</td>
+          <td class="num">108.7</td>
+          <td class="num">110.2</td>
+        </tr>
+        <tr>
+          <td>total_loop_ms</td>
+          <td class="num">30</td>
+          <td class="num">199.7</td>
+          <td class="num">18.1</td>
+          <td class="num">167.2</td>
+          <td class="num">198.6</td>
+          <td class="num">226.2</td>
+          <td class="num">233.3</td>
+        </tr>
+      </tbody>
+    </table>
+    <p class="muted">
+      Radar mean 136 vs p50 187: many short reads during window fill pull the mean down;
+      on a full frame the radar wait is ~187–202 ms (5 Hz). Loop ~200 ms is that cadence,
+      not model time. Mel is CPU, outside the CUDA forward.
+    </p>
+  </div>
+
+  <div class="section">
+    <h2>Memory</h2>
+    <div class="grid">
+      <div class="card">
+        <div class="stat">11.00 MB</div>
+        <div class="label">Weights + buffers (11.26 MB binary)</div>
+      </div>
+      <div class="card">
+        <div class="stat">5.48 MB</div>
+        <div class="label">Input window estimate (fp32)</div>
+      </div>
+      <div class="card">
+        <div class="stat">1.45 GB</div>
+        <div class="label">Process RSS mean (max 1.455)</div>
+      </div>
+      <div class="card">
+        <div class="stat">3.10 GB</div>
+        <div class="label">System RAM used / 7.62 GB Orin</div>
+      </div>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th>Footprint</th>
+          <th class="num">Bytes</th>
+          <th class="num">MB</th>
+          <th>What</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>weight_memory</td>
+          <td class="num">11 533 204</td>
+          <td class="num">11.00</td>
+          <td>2 881 485 params × 4 B + registered buffers</td>
+        </tr>
+        <tr>
+          <td>buffer_memory_estimate</td>
+          <td class="num">5 744 640</td>
+          <td class="num">5.48</td>
+          <td>window tensors only: 1 cam + 2 radar + fused radar + 1 audio · not peak activations</td>
+        </tr>
+        <tr>
+          <td>process RSS</td>
+          <td class="num">—</td>
+          <td class="num">1451 mean</td>
+          <td>CUDA context, OpenCV, radar SDK, Python — not the 11 MB weights</td>
+        </tr>
+        <tr>
+          <td>GPU DRAM</td>
+          <td class="num">—</td>
+          <td class="num">7619.8 total</td>
+          <td>platform.gpu_total_memory_mb; no CUDA peak recorded this run</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="section">
+    <h2>Resource (tegrastats + psutil, 500 ms)</h2>
+    <p class="muted">44 psutil samples · 43 tegrastats samples while the live loop ran.</p>
+    <div class="grid">
+      <div class="card">
+        <div class="stat">52%</div>
+        <div class="label">Process CPU mean · max 111%</div>
+      </div>
+      <div class="card">
+        <div class="stat">22%</div>
+        <div class="label">System CPU avg · max 32.5%</div>
+      </div>
+      <div class="card">
+        <div class="stat">41%</div>
+        <div class="label">Hottest-core mean · max 80.8%</div>
+      </div>
+      <div class="card">
+        <div class="stat">17%</div>
+        <div class="label">GR3D mean · peak 99% · EMC n/a</div>
+      </div>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th>Counter</th>
+          <th class="num">n</th>
+          <th class="num">mean</th>
+          <th class="num">max</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td>process_cpu_percent</td><td class="num">44</td><td class="num">52.4</td><td class="num">111.0</td></tr>
+        <tr><td>system_cpu_avg_percent</td><td class="num">44</td><td class="num">22.2</td><td class="num">32.5</td></tr>
+        <tr><td>system_cpu_peak_percent</td><td class="num">44</td><td class="num">41.2</td><td class="num">80.8</td></tr>
+        <tr><td>process_rss_mb</td><td class="num">44</td><td class="num">1451.0</td><td class="num">1455.2</td></tr>
+        <tr><td>system_ram_used_mb</td><td class="num">44</td><td class="num">3103.9</td><td class="num">3115.9</td></tr>
+        <tr><td>tegrastats_gr3d_util_percent</td><td class="num">43</td><td class="num">17.2</td><td class="num">99.0</td></tr>
+        <tr><td>tegrastats_emc_util_percent</td><td class="num">—</td><td class="num">null</td><td class="num">—</td></tr>
+      </tbody>
+    </table>
+    <p class="muted">
+      GR3D mean 17% with 99% spikes: GPU is bursty on the 95 ms forward, idle on the
+      ~100 ms radar wait. Process CPU &gt; 100% is normal (multi-thread: capture + mel + Python).
+    </p>
+  </div>
+</body>
+</html>
