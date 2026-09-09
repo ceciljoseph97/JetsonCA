@@ -32,7 +32,7 @@ from pathlib import Path
 
 import numpy as np
 
-from audio_features import audio_is_dead_microphone, audio_is_usable, audio_wave_stats
+from audio_features import audio_is_dead_microphone, audio_wave_stats
 from device_select import attach_camera_names, match_audio_to_camera, prefer_microsoft, prefer_microsoft_index
 from live_audio import LiveAudioBuffer, list_audio_input_devices
 from radar_utils import DualRadarSession, list_radar_ports, list_radar_uuids
@@ -49,7 +49,7 @@ DEFAULT_OUT = ROOT / "data"
 
 
 class CameraRecorder:
-  """Frame grabber using the same open_video_capture() path as the GUI."""
+  """Continuous frame grabber (same open_video_capture as GUI). Keep open across clips."""
 
   def __init__(self, device_id: int, width: int, height: int, fps: float):
     self.device_id = device_id
@@ -59,8 +59,11 @@ class CameraRecorder:
     self._cap = None
     self._thread = None
     self._stop = threading.Event()
+    self._lock = threading.Lock()
     self._frames: list[np.ndarray] = []
     self._timestamps: list[float] = []
+    self._clip_active = False
+    self._t0: float | None = None
 
   def start(self):
     import cv2
@@ -76,11 +79,36 @@ class CameraRecorder:
     self._cap.set(cv2.CAP_PROP_FPS, self.fps)
     self._thread = threading.Thread(target=self._reader_loop, daemon=True)
     self._thread.start()
-    # brief warmup so first clip isn't empty
     deadline = time.time() + 1.5
-    while time.time() < deadline and not self._frames:
+    while time.time() < deadline:
+      with self._lock:
+        if self._frames or not self._clip_active:
+          break
       time.sleep(0.05)
+    # warm a few frames so first clip isn't empty
+    time.sleep(0.3)
     return self
+
+  def begin_clip(self):
+    with self._lock:
+      self._frames = []
+      self._timestamps = []
+      self._t0 = None
+      self._clip_active = True
+
+  def end_clip(self) -> tuple[np.ndarray, np.ndarray]:
+    with self._lock:
+      self._clip_active = False
+      if not self._frames:
+        frames = np.empty((0, self.height, self.width, 3), dtype=np.uint8)
+        timestamps = np.empty((0,), dtype=np.float64)
+      else:
+        frames = np.stack(self._frames, axis=0).astype(np.uint8)
+        timestamps = np.asarray(self._timestamps, dtype=np.float64)
+      self._frames = []
+      self._timestamps = []
+      self._t0 = None
+    return frames, timestamps
 
   def _reader_loop(self):
     import cv2
@@ -93,29 +121,31 @@ class CameraRecorder:
       if not ok:
         time.sleep(0.01)
         continue
+      with self._lock:
+        active = self._clip_active
+      if not active:
+        time.sleep(0.005)
+        continue
       if (now - last_saved) < min_period_s:
         continue
       frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
       if frame.shape[1] != self.width or frame.shape[0] != self.height:
         frame = cv2.resize(frame, (self.width, self.height), interpolation=cv2.INTER_AREA)
-      self._frames.append(frame)
-      self._timestamps.append(now)
+      with self._lock:
+        if self._t0 is None:
+          self._t0 = now
+        self._frames.append(frame)
+        self._timestamps.append(now - self._t0)
       last_saved = now
 
-  def stop(self) -> tuple[np.ndarray, np.ndarray]:
+  def stop(self):
     self._stop.set()
+    with self._lock:
+      self._clip_active = False
     if self._thread is not None:
       self._thread.join(timeout=2.0)
     if self._cap is not None:
       self._cap.release()
-
-    if not self._frames:
-      return np.empty((0, self.height, self.width, 3), dtype=np.uint8), np.empty((0,), dtype=np.float64)
-
-    t0 = self._timestamps[0]
-    timestamps = np.asarray([ts - t0 for ts in self._timestamps], dtype=np.float64)
-    frames = np.stack(self._frames, axis=0).astype(np.uint8)
-    return frames, timestamps
 
 
 def _audio_timestamps(wave: np.ndarray, sample_rate: int, block: int = 1024) -> np.ndarray:
@@ -127,7 +157,43 @@ def _audio_timestamps(wave: np.ndarray, sample_rate: int, block: int = 1024) -> 
   return starts / float(sample_rate)
 
 
-def record_dual_radar_clip(session: DualRadarSession, num_frames: int) -> tuple[np.ndarray, np.ndarray]:
+def soft_gain_audio(audio: np.ndarray, *, target_peak: float = 0.28) -> tuple[np.ndarray, bool]:
+  """Match GUI recorder: boost quiet LifeCam levels without clipping."""
+  wave = np.asarray(audio, dtype=np.float32)
+  flat = wave.reshape(-1)
+  if flat.size == 0:
+    return wave, False
+  peak = float(np.max(np.abs(flat)))
+  if 1e-5 < peak < 0.08:
+    gained = np.clip(wave * (target_peak / peak), -1.0, 1.0)
+    return gained.astype(np.float32), True
+  return wave, False
+
+
+def radar_energy_stats(radar: np.ndarray) -> dict[str, float]:
+  arr = np.asarray(radar, dtype=np.float32)
+  if arr.size == 0:
+    return {"mean": 0.0, "peak": 0.0, "nonzero_frac": 0.0}
+  return {
+    "mean": float(np.mean(arr)),
+    "peak": float(np.max(arr)),
+    "nonzero_frac": float(np.mean(arr > 1e-4)),
+  }
+
+
+def warmup_radar(session: DualRadarSession, frames: int = 8) -> None:
+  """Drain FIFO / USB glitches after cam/mic attach so RD maps aren't blue noise."""
+  for _ in range(max(0, int(frames))):
+    session.read_tensors()
+    time.sleep(0.01)
+
+
+def record_dual_radar_clip(
+  session: DualRadarSession,
+  num_frames: int,
+  *,
+  max_consecutive_misses: int = 6,
+) -> tuple[np.ndarray, np.ndarray]:
   if not session.slots[0].available or not session.slots[1].available:
     raise RuntimeError(
       "Need two live BGT60 radars (mirroring disabled). "
@@ -135,12 +201,19 @@ def record_dual_radar_clip(session: DualRadarSession, num_frames: int) -> tuple[
     )
   radar1_frames: list[np.ndarray] = []
   radar2_frames: list[np.ndarray] = []
-  for _ in range(num_frames):
+  miss = 0
+  while len(radar1_frames) < num_frames:
     radar1, radar2 = session.read_tensors()
-    if radar1 is None:
-      raise ErrorFrameAcquisitionFailed("radar1 frame drop")
-    if radar2 is None:
-      raise ErrorFrameAcquisitionFailed("radar2 frame drop")
+    if radar1 is None or radar2 is None:
+      miss += 1
+      if miss > max_consecutive_misses:
+        raise ErrorFrameAcquisitionFailed(
+          f"radar frame drop (miss streak={miss}). "
+          "USB contention — close GUI, use powered hub, or --frame-rate 3."
+        )
+      time.sleep(0.02)
+      continue
+    miss = 0
     radar1_frames.append(radar1.numpy())
     radar2_frames.append(radar2.numpy())
   return (
@@ -149,33 +222,42 @@ def record_dual_radar_clip(session: DualRadarSession, num_frames: int) -> tuple[
   )
 
 
-def record_multimodal_clip_dual(session: DualRadarSession, num_frames: int, args):
-  camera = CameraRecorder(args.camera_device, args.camera_width, args.camera_height, args.camera_fps).start()
-  audio_buf: LiveAudioBuffer | None = None
-  if args.audio:
-    audio_buf = LiveAudioBuffer(sample_rate=args.audio_sample_rate)
-    audio_buf.start(device=args.audio_device)
-    if not audio_buf.running:
-      print(f"  WARNING: mic failed ({audio_buf.last_error}) — continuing without audio")
-      audio_buf = None
-    else:
-      audio_buf.start_recording_sink()
+def record_multimodal_clip_dual(
+  session: DualRadarSession,
+  num_frames: int,
+  args,
+  *,
+  camera: CameraRecorder,
+  audio_buf: LiveAudioBuffer | None,
+):
+  camera.begin_clip()
+  if audio_buf is not None:
+    audio_buf.start_recording_sink()
   try:
+    warmup_radar(session, frames=max(4, int(args.radar_warmup)))
     radar_clip, radar2_clip = record_dual_radar_clip(session, num_frames)
   finally:
-    camera_frames, camera_timestamps = camera.stop()
+    camera_frames, camera_timestamps = camera.end_clip()
     if audio_buf is None:
       audio_samples, audio_timestamps = None, None
     else:
       wave = audio_buf.stop_recording_sink()
       if wave.size == 0:
         wave = audio_buf.snapshot()
-      audio_buf.stop()
+        # only keep last ~clip duration from ring buffer
+        n_keep = int(np.ceil((num_frames / max(float(getattr(args, "frame_rate", 5.0)), 1.0) + 0.5) * args.audio_sample_rate))
+        if wave.size > n_keep:
+          wave = wave[-n_keep:]
       if wave.ndim == 1:
         audio_samples = wave[:, np.newaxis]
       else:
         audio_samples = wave
-      audio_timestamps = _audio_timestamps(wave, args.audio_sample_rate, args.audio_blocksize)
+      audio_samples, gained = soft_gain_audio(audio_samples)
+      if gained:
+        print("  audio soft-gain applied (quiet LifeCam levels)")
+      audio_timestamps = _audio_timestamps(
+        audio_samples.reshape(-1), args.audio_sample_rate, args.audio_blocksize
+      )
   return radar_clip, radar2_clip, camera_frames, camera_timestamps, audio_samples, audio_timestamps
 
 
@@ -251,18 +333,21 @@ def save_multimodal_clip(
   }
   if audio_samples is not None and audio_samples.size > 0:
     stats = audio_wave_stats(audio_samples)
-    coarse_label = gesture.split("_")[0] if gesture else class_dir.parent.name
-    if not audio_is_usable(audio_samples, label=coarse_label):
-      reason = "dead mic" if audio_is_dead_microphone(audio_samples) else "too quiet for action class"
+    # Gestures are quiet — only reject dead mic. Soft-gain already applied upstream.
+    if audio_is_dead_microphone(audio_samples):
       print(
-        f"  WARNING: audio unusable ({reason}: rms={stats['rms']:.2e}, "
-        f"std={stats['std']:.2e}, peak={stats['peak']:.2e}) — check device/mute/gain"
+        f"  WARNING: dead mic (rms={stats['rms']:.2e}, peak={stats['peak']:.2e}) — "
+        "check --audio-device / unmute; clip still saved"
       )
+    else:
+      print(f"  audio ok rms={stats['rms']:.2e} peak={stats['peak']:.2e}")
     np.save(audio_path, audio_samples)
     meta_payload["audio_shape"] = list(audio_samples.shape)
     meta_payload["audio_sample_rate_hz"] = int(audio_sample_rate or 0)
     meta_payload["audio_channels"] = int(audio_channels or audio_samples.shape[-1])
     meta_payload["audio_chunk_timestamps_s"] = audio_timestamps.tolist()
+    meta_payload["audio_rms"] = stats["rms"]
+    meta_payload["audio_peak"] = stats["peak"]
   meta_path.write_text(json.dumps(meta_payload, indent=2), encoding="utf-8")
   return radar_path, radar1_path, radar2_path, camera_path, audio_path, meta_path
 
@@ -381,6 +466,8 @@ def record_session(
     )
 
   # Keep one session for all clips (GUI does this; reopen-per-clip → missing).
+  camera = CameraRecorder(args.camera_device, args.camera_width, args.camera_height, args.camera_fps)
+  audio_buf: LiveAudioBuffer | None = None
   with _open_session(args, profile, frame_rate_hz) as session:
     print(session.diagnose())
     if not (session.slots[0].available and session.slots[1].available):
@@ -390,62 +477,99 @@ def record_session(
         "Try: --radar1-port /dev/ttyACM0 --radar2-port /dev/ttyACM1\n"
         "Or close gui_app.py / other SDK users holding the radars."
       )
-    print(f"Radars ready: {session.status_text}\n")
-
-    for n in range(count):
-      if args.no_prompt:
-        print(f"\nClip {n + 1}/{count} — perform '{gesture}' in 3s...")
+    print(f"Radars ready: {session.status_text}")
+    try:
+      camera.start()
+    except RuntimeError as exc:
+      raise SystemExit(f"Camera failed: {exc}") from exc
+    if args.audio:
+      audio_buf = LiveAudioBuffer(sample_rate=args.audio_sample_rate)
+      audio_buf.start(device=args.audio_device)
+      if not audio_buf.running:
+        print(f"WARNING: mic failed ({audio_buf.last_error}) — continuing without audio")
+        audio_buf = None
       else:
-        input(f"\nClip {n + 1}/{count} — perform '{gesture}', press Enter when ready...")
-      for t in range(3, 0, -1):
-        print(f"  {t}...")
-        time.sleep(1)
-      print("  RECORDING")
-      try:
-        idx = next_index(class_dir)
-        (
-          radar_clip,
-          radar2_clip,
-          camera_frames,
-          camera_timestamps,
-          audio_samples,
-          audio_timestamps,
-        ) = record_multimodal_clip_dual(session, frames, args)
-        active_uuids = [slot.uuid for slot in session.slots if slot.uuid]
-        active_ports = [slot.port for slot in session.slots if getattr(slot, "port", None)]
+        print(f"Mic running device={args.audio_device!r}")
+    # Let USB settle, then flush radar FIFOs (stops blue/empty RD flicker).
+    time.sleep(0.5)
+    warmup_radar(session, frames=max(8, int(args.radar_warmup)))
+    sample = session.read_tensors()[0]
+    if sample is not None:
+      e1 = radar_energy_stats(sample.numpy())
+      print(f"Radar warmup energy peak≈{e1['peak']:.3f} (want >0.01 with hand near)\n")
+    else:
+      print("Radar warmup: no frame yet\n")
 
-        paths = save_multimodal_clip(
-          class_dir,
-          idx,
-          radar_clip,
-          radar2_clip,
-          camera_frames,
-          camera_timestamps,
-          audio_samples,
-          audio_timestamps,
-          gesture,
-          frame_rate_hz,
-          active_uuids,
-          active_ports,
-          profile,
-          args.min_range_m,
-          args.max_range_m,
-          audio_sample_rate=args.audio_sample_rate if args.audio else None,
-          audio_channels=args.audio_channels if args.audio else None,
-        )
-        print(
-          f"  saved radar={paths[0].name} radar2={paths[2].name} "
-          f"camera={paths[3].name} audio={paths[4].name} meta={paths[5].name} "
-          f"r1={radar_clip.shape} r2={radar2_clip.shape} cam={camera_frames.shape}"
-        )
-      except ErrorFrameAcquisitionFailed:
-        print("  FRAME DROP — clip skipped. Lower --frame-rate or check USB power.")
-      except RuntimeError as exc:
-        print(f"  SENSOR ERROR — {exc}")
-        break
-      except ImportError as exc:
-        print(f"  AUDIO ERROR — {exc}")
-        break
+    try:
+      for n in range(count):
+        if args.no_prompt:
+          print(f"\nClip {n + 1}/{count} — perform '{gesture}' in 3s...")
+        else:
+          input(f"\nClip {n + 1}/{count} — perform '{gesture}', press Enter when ready...")
+        for t in range(3, 0, -1):
+          print(f"  {t}...")
+          time.sleep(1)
+        print("  RECORDING")
+        try:
+          idx = next_index(class_dir)
+          (
+            radar_clip,
+            radar2_clip,
+            camera_frames,
+            camera_timestamps,
+            audio_samples,
+            audio_timestamps,
+          ) = record_multimodal_clip_dual(
+            session, frames, args, camera=camera, audio_buf=audio_buf
+          )
+          r1e = radar_energy_stats(radar_clip)
+          r2e = radar_energy_stats(radar2_clip)
+          if r1e["peak"] < 0.01 and r2e["peak"] < 0.01:
+            print(
+              f"  WARNING: radar looks empty (r1 peak={r1e['peak']:.3f} r2={r2e['peak']:.3f}) — "
+              "hand closer / gesture profile / USB drop"
+            )
+          else:
+            print(f"  radar energy r1 peak={r1e['peak']:.3f} r2 peak={r2e['peak']:.3f}")
+          active_uuids = [slot.uuid for slot in session.slots if slot.uuid]
+          active_ports = [slot.port for slot in session.slots if getattr(slot, "port", None)]
+
+          paths = save_multimodal_clip(
+            class_dir,
+            idx,
+            radar_clip,
+            radar2_clip,
+            camera_frames,
+            camera_timestamps,
+            audio_samples,
+            audio_timestamps,
+            gesture,
+            frame_rate_hz,
+            active_uuids,
+            active_ports,
+            profile,
+            args.min_range_m,
+            args.max_range_m,
+            audio_sample_rate=args.audio_sample_rate if args.audio else None,
+            audio_channels=args.audio_channels if args.audio else None,
+          )
+          print(
+            f"  saved radar={paths[0].name} radar2={paths[2].name} "
+            f"camera={paths[3].name} audio={paths[4].name} meta={paths[5].name} "
+            f"r1={radar_clip.shape} r2={radar2_clip.shape} cam={camera_frames.shape}"
+          )
+        except ErrorFrameAcquisitionFailed as exc:
+          print(f"  FRAME DROP — {exc}")
+        except RuntimeError as exc:
+          print(f"  SENSOR ERROR — {exc}")
+          break
+        except ImportError as exc:
+          print(f"  AUDIO ERROR — {exc}")
+          break
+    finally:
+      camera.stop()
+      if audio_buf is not None:
+        audio_buf.stop()
 
 
 def _parse_audio_device(value: str | None) -> int | str | None:
@@ -469,6 +593,7 @@ def parse_args():
   p.add_argument("--no-prompt", action="store_true", help="No Enter between clips (3s countdown only)")
   p.add_argument("--frames", type=int, default=40)
   p.add_argument("--frame-rate", type=float, default=5.0)
+  p.add_argument("--radar-warmup", type=int, default=10, help="Discard N radar frames before each clip")
   p.add_argument("--num-rx", type=int, default=3)
   p.add_argument("--radar-profile", choices=("safe", "balanced", "gesture"), default="gesture")
   p.add_argument("--min-range-m", type=float, default=0.0)

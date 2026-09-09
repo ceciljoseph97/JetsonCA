@@ -25,7 +25,7 @@ from PIL import Image, ImageDraw, ImageFont, ImageTk
 from tkinter import filedialog, ttk
 
 from audio_features import mel_tensor_from_wave, render_audio_monitor_rgb
-from checkpoint import default_checkpoint, load_checkpoint, preprocess_camera_frame
+from checkpoint import default_checkpoint, load_checkpoint, preprocess_camera_frame, resolve_window_len
 from device_select import match_audio_to_camera, prefer_microsoft
 from gui_benchmark import mount_profile_tab
 from jetson_env import apply_jetson_runtime_tweaks, default_device
@@ -390,7 +390,8 @@ class InferenceWorker:
     self.dual_radar_fuse = str(dual_radar_fuse or self.config.get("dual_radar_fuse", "none"))
     self.no_radar = no_radar
     self.no_audio = no_audio
-    self.window_len = window_len
+    # Prefer checkpoint seq_len (Crossattention train) when present; else CLI --window.
+    self.window_len = resolve_window_len(self.config, window_len)
     self.profile_metrics = profile_metrics(radar_profile)
     self.min_range_m = float(min_range_m if min_range_m is not None else self.config.get("min_range_m", 0.3))
     self.max_range_m = float(
@@ -439,11 +440,11 @@ class InferenceWorker:
     self.audio_enabled = bool(self.enable_audio)
     self.recording_active = False
 
-    self.camera_buffer: deque[torch.Tensor] = deque(maxlen=window_len)
-    self.camera_rgb_buffer: deque[np.ndarray] = deque(maxlen=window_len)
-    self.radar_buffer: deque[torch.Tensor] = deque(maxlen=window_len)
-    self.radar1_buffer: deque[torch.Tensor] = deque(maxlen=window_len)
-    self.radar2_buffer: deque[torch.Tensor] = deque(maxlen=window_len)
+    self.camera_buffer: deque[torch.Tensor] = deque(maxlen=self.window_len)
+    self.camera_rgb_buffer: deque[np.ndarray] = deque(maxlen=self.window_len)
+    self.radar_buffer: deque[torch.Tensor] = deque(maxlen=self.window_len)
+    self.radar1_buffer: deque[torch.Tensor] = deque(maxlen=self.window_len)
+    self.radar2_buffer: deque[torch.Tensor] = deque(maxlen=self.window_len)
 
     self.latest_state: dict[str, Any] = {
       "status": "idle",
@@ -2017,7 +2018,12 @@ def parse_args():
   p.add_argument("--no-radar", action="store_true", help="Camera-only: skip radar SDK")
   p.add_argument("--dual-radar-fuse", choices=("auto", "none", "mean", "max"), default="auto",
                  help="auto = use checkpoint config (Crossattention train default: none)")
-  p.add_argument("--window", type=int, default=30)
+  p.add_argument(
+    "--window",
+    type=int,
+    default=30,
+    help="Temporal window (frames). Overridden by checkpoint config.seq_len when set (e.g. walk_wave_snap_v1).",
+  )
   p.add_argument("--detect-threshold", type=float, default=0.55,
                  help="GATE threshold on detect_prob (learned detect head, else human fallback)")
   p.add_argument("--human-threshold", type=float, default=0.55)

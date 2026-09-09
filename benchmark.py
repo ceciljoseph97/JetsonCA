@@ -34,7 +34,7 @@ import torch
 import torch.nn as nn
 
 from jetson_env import apply_jetson_runtime_tweaks, default_device, is_jetson
-from checkpoint import audio_off_kwargs, default_checkpoint, load_checkpoint, preprocess_camera_frame
+from checkpoint import audio_off_kwargs, default_checkpoint, load_checkpoint, preprocess_camera_frame, resolve_window_len
 
 
 def _live_camera_deps():
@@ -1261,6 +1261,7 @@ def run_benchmark(args) -> dict[str, Any]:
   device = torch.device(args.device)
   model, labels, config = load_checkpoint(args.checkpoint, str(device))
   model.eval()
+  window = resolve_window_len(config, args.window)
 
   params = count_parameters(model)
   params_by_block = count_parameters_by_block(model)
@@ -1268,7 +1269,7 @@ def run_benchmark(args) -> dict[str, Any]:
   enable_audio = _enable_audio(model)
   buffer_mem = estimate_activation_buffer_mb(
     batch=args.batch_size,
-    window=args.window,
+    window=window,
     image_size=int(config["image_size"]),
     n_cameras=args.n_cameras,
     n_radars=args.n_radars,
@@ -1300,7 +1301,7 @@ def run_benchmark(args) -> dict[str, Any]:
           model,
           mode=live_mode,
           batch=args.batch_size,
-          window=args.window,
+          window=window,
           image_size=int(config["image_size"]),
           device=device,
           warmup=warmup,
@@ -1334,7 +1335,7 @@ def run_benchmark(args) -> dict[str, Any]:
           model,
           mode=mode,
           batch=args.batch_size,
-          window=args.window,
+          window=window,
           image_size=int(config["image_size"]),
           device=device,
           warmup=warmup,
@@ -1722,7 +1723,12 @@ def parse_args():
   parser.add_argument("--checkpoint", type=Path, default=default_checkpoint())
   parser.add_argument("--device", type=str, default=default_device())
   parser.add_argument("--batch-size", type=int, default=1)
-  parser.add_argument("--window", type=int, default=30, help="Temporal window length (frames)")
+  parser.add_argument(
+    "--window",
+    type=int,
+    default=30,
+    help="Temporal window (frames). Overridden by checkpoint config.seq_len when set.",
+  )
   parser.add_argument("--warmup", type=int, default=5 if is_jetson() else 10)
   parser.add_argument("--runs", type=int, default=30 if is_jetson() else 50)
   parser.add_argument(

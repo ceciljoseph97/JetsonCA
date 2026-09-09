@@ -11,9 +11,13 @@ LABEL_ALIASES: dict[str, str] = {
   "wavingright": "waving",
   "waving_left": "waving",
   "waving_right": "waving",
+  "fingersnapping": "snapping",
+  "finger_snapping": "snapping",
+  "snap": "snapping",
   "standing_still": "standing_still",
 }
 
+# TODO(later): train coarse head as gesture vs walking; display already groups waving/snapping.
 LABEL_HIERARCHY: dict[str, tuple[str, str, str]] = {
   "clapping": ("human", "clapping", "still"),
   "jumping": ("human", "jumping", "still"),
@@ -22,6 +26,7 @@ LABEL_HIERARCHY: dict[str, tuple[str, str, str]] = {
   "walking_away": ("human", "walking", "away"),
   "crossing": ("human", "walking", "crossing"),
   "waving": ("human", "waving", "still"),
+  "snapping": ("human", "snapping", "still"),
   "standing_still": ("human", "standing", "still"),
   "background": ("background", "none", "none"),
   "no_human": ("background", "none", "none"),
@@ -64,8 +69,13 @@ def label_hierarchy(label: str) -> tuple[str, str, str]:
 
 
 def format_hierarchy(label: str, confidence: float | None = None) -> str:
+  label = canonical_label_name(label)
+  if label in ("waving", "snapping"):
+    line = f"gesture - {label}"
+    if confidence is not None:
+      line += f" ({confidence:.2f})"
+    return line
   parent, activity, subaction = label_hierarchy(label)
-  # Lead with flat class name so crossing / walking_away stay readable in overlays.
   head = label
   if confidence is not None:
     head += f" ({confidence:.2f})"

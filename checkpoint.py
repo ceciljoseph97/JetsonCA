@@ -13,14 +13,19 @@ from model import MultiModalCrossAttentionNet
 
 
 WALKING_BG_AUDIO_V1 = Path("artifacts/walking_bg_audio_v1/best_multimodal_crossattention.pt")
+WALK_WAVE_SNAP_V1 = Path("artifacts/walk_wave_snap_v1/best_multimodal_crossattention.pt")
 
 
 def default_checkpoint() -> Path:
-  """Prefer walking_bg_audio_v1 (audio + DETECT); fall back to sibling Crossattention / legacy edge ckpts."""
+  """Prefer latest walk/wave/snap audio ckpt; fall back to walking / Crossattention siblings."""
   here = Path(__file__).resolve().parent
+  ca = here.parent / "Crossattention"
   candidates = [
+    here / WALK_WAVE_SNAP_V1,
+    ca / WALK_WAVE_SNAP_V1,
+    Path.cwd() / WALK_WAVE_SNAP_V1,
     here / WALKING_BG_AUDIO_V1,
-    here.parent / "Crossattention" / "artifacts" / "walking_bg_audio_v1" / "best_multimodal_crossattention.pt",
+    ca / "artifacts" / "walking_bg_audio_v1" / "best_multimodal_crossattention.pt",
     Path.cwd() / WALKING_BG_AUDIO_V1,
     here / "artifacts" / "best_multimodal_crossattention_detect.pt",
     here / "artifacts" / "best_multimodal_crossattention.pt",
@@ -28,7 +33,15 @@ def default_checkpoint() -> Path:
   for path in candidates:
     if path.exists():
       return path
-  return here / WALKING_BG_AUDIO_V1
+  return here / WALK_WAVE_SNAP_V1
+
+
+def resolve_window_len(config: dict, cli_window: int | None = 30) -> int:
+  """Prefer checkpoint seq_len from Crossattention train; else CLI/default."""
+  cfg = int(config.get("seq_len") or 0) or 0
+  if cfg > 0:
+    return cfg
+  return int(cli_window or 30) or 30
 
 
 def audio_off_kwargs(model, device) -> dict:

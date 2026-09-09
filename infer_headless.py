@@ -13,7 +13,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from checkpoint import audio_off_kwargs, default_checkpoint, load_checkpoint, preprocess_camera_frame
+from checkpoint import audio_off_kwargs, default_checkpoint, load_checkpoint, preprocess_camera_frame, resolve_window_len
 from jetson_env import apply_jetson_runtime_tweaks, default_device
 from label_hierarchy import combine_hierarchical_probs, inference_label
 from radar_utils import DualRadarSession, fuse_dual_radar_tensors, fuse_radar_streams_for_model
@@ -61,7 +61,12 @@ def parse_args():
   p.add_argument("--no-mirror-radar2", action="store_false", dest="mirror_radar2")
   p.add_argument("--no-radar", action="store_true", help="Camera-only live: skip radar SDK, radar_present=False")
   p.add_argument("--dual-radar-fuse", choices=("auto", "none", "mean", "max"), default="auto")
-  p.add_argument("--window", type=int, default=30)
+  p.add_argument(
+    "--window",
+    type=int,
+    default=30,
+    help="Temporal window (frames). Overridden by checkpoint config.seq_len when set.",
+  )
   p.add_argument("--detect-threshold", type=float, default=0.35)
   p.add_argument("--human-threshold", type=float, default=0.5)
   p.add_argument("--live-detector-preprocess", action="store_true",
@@ -82,7 +87,7 @@ def main():
   model, labels, config = load_checkpoint(args.checkpoint, args.device)
   model.eval()
   image_size = int(config["image_size"])
-  window = int(args.window)
+  window = resolve_window_len(config, args.window)
   fuse_mode = str(config.get("dual_radar_fuse", "none")) if args.dual_radar_fuse == "auto" else args.dual_radar_fuse
   detector_preprocess = False  # live CFAR is opt-in; train flag alone is too slow on Jetson
   detector_min_snr_db = float(config.get("detector_min_snr_db", 6.0))
