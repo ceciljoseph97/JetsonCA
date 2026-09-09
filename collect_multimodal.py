@@ -1,20 +1,28 @@
 #!/usr/bin/env python3
 """Collect dual BGT60 + camera + mic clips on Jetson into Crossattention-compatible layout.
 
+Uses the same camera/audio discovery as gui_app.py:
+  - jetson_env.ensure_conda_lib_path (cv2 CXXABI)
+  - realtime_multimodal.open_video_capture / probe_camera_devices
+  - live_audio.LiveAudioBuffer (sounddevice → arecord → ffmpeg; no PortAudio required)
+
 Layout (same as Crossattention/train.py):
   data/{group}/{class}/{radar,radar1,radar2,camera,audio,meta}/{idx:02d}.npy|.json
-
-Requires two live radars (mirroring disabled). Sync `data/` back to the PC to train.
 
 Examples (on Jetson):
   python collect_multimodal.py --list-devices
   python collect_multimodal.py --radar-profile gesture --frames 40 --frame-rate 10 \\
-    --group gestures --class push --count 20 --audio
+    --group gestures --class push --count 20
   python collect_multimodal.py --radar1-port /dev/ttyACM0 --radar2-port /dev/ttyACM1 \\
     --class pinch_index --count 15
 """
 
 from __future__ import annotations
+
+# Prefer conda libstdc++ BEFORE cv2 (same as gui_app).
+from jetson_env import ensure_conda_lib_path
+
+ensure_conda_lib_path(reexec=True)
 
 import argparse
 import json
@@ -25,8 +33,11 @@ from pathlib import Path
 import numpy as np
 
 from audio_features import audio_is_dead_microphone, audio_is_usable, audio_wave_stats
+from device_select import attach_camera_names, match_audio_to_camera, prefer_microsoft, prefer_microsoft_index
+from live_audio import LiveAudioBuffer, list_audio_input_devices
 from radar_utils import DualRadarSession, list_radar_ports, list_radar_uuids
 from range_gating import profile_metrics
+from realtime_multimodal import open_video_capture, probe_camera_devices
 
 try:
   from ifxradarsdk.common.exceptions import ErrorFrameAcquisitionFailed
@@ -37,27 +48,9 @@ ROOT = Path(__file__).resolve().parent
 DEFAULT_OUT = ROOT / "data"
 
 
-def _open_camera(device_id: int, width: int, height: int, fps: float):
-  import cv2
-
-  backends = []
-  if hasattr(cv2, "CAP_V4L2"):
-    backends.append(cv2.CAP_V4L2)
-  backends.append(0)
-  last_err = None
-  for backend in backends:
-    cap = cv2.VideoCapture(device_id, backend)
-    if cap.isOpened():
-      cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-      cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-      cap.set(cv2.CAP_PROP_FPS, fps)
-      return cap
-    last_err = backend
-    cap.release()
-  raise RuntimeError(f"Could not open camera device {device_id} (tried backends incl. {last_err})")
-
-
 class CameraRecorder:
+  """Frame grabber using the same open_video_capture() path as the GUI."""
+
   def __init__(self, device_id: int, width: int, height: int, fps: float):
     self.device_id = device_id
     self.width = width
@@ -70,9 +63,23 @@ class CameraRecorder:
     self._timestamps: list[float] = []
 
   def start(self):
-    self._cap = _open_camera(self.device_id, self.width, self.height, self.fps)
+    import cv2
+
+    self._cap = open_video_capture(self.device_id, verify_frame=True)
+    if self._cap is None:
+      raise RuntimeError(
+        f"Could not open camera device {self.device_id}. "
+        "Run --list-devices (same probe as GUI)."
+      )
+    self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
+    self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
+    self._cap.set(cv2.CAP_PROP_FPS, self.fps)
     self._thread = threading.Thread(target=self._reader_loop, daemon=True)
     self._thread.start()
+    # brief warmup so first clip isn't empty
+    deadline = time.time() + 1.5
+    while time.time() < deadline and not self._frames:
+      time.sleep(0.05)
     return self
 
   def _reader_loop(self):
@@ -84,7 +91,7 @@ class CameraRecorder:
       ok, frame = self._cap.read()
       now = time.perf_counter()
       if not ok:
-        time.sleep(0.005)
+        time.sleep(0.01)
         continue
       if (now - last_saved) < min_period_s:
         continue
@@ -111,63 +118,13 @@ class CameraRecorder:
     return frames, timestamps
 
 
-class AudioRecorder:
-  def __init__(
-    self,
-    device: int | str | None,
-    sample_rate: int,
-    channels: int,
-    blocksize: int = 1024,
-  ):
-    self.device = device
-    self.sample_rate = sample_rate
-    self.channels = channels
-    self.blocksize = blocksize
-    self._stream = None
-    self._chunks: list[np.ndarray] = []
-    self._chunk_timestamps: list[float] = []
-    self._t0: float | None = None
-    self._lock = threading.Lock()
-
-  def start(self):
-    import sounddevice as sd
-
-    def callback(indata, frames, time_info, status):
-      del frames, time_info
-      if status:
-        print(f"  audio status: {status}")
-      now = time.perf_counter()
-      with self._lock:
-        if self._t0 is None:
-          self._t0 = now
-        self._chunks.append(indata.copy())
-        self._chunk_timestamps.append(now - self._t0)
-
-    self._stream = sd.InputStream(
-      device=self.device,
-      samplerate=self.sample_rate,
-      channels=self.channels,
-      dtype="float32",
-      blocksize=self.blocksize,
-      callback=callback,
-    )
-    self._stream.start()
-    return self
-
-  def stop(self) -> tuple[np.ndarray, np.ndarray]:
-    if self._stream is not None:
-      self._stream.stop()
-      self._stream.close()
-      self._stream = None
-
-    if not self._chunks:
-      return np.empty((0, self.channels), dtype=np.float32), np.empty((0,), dtype=np.float64)
-
-    audio = np.concatenate(self._chunks, axis=0).astype(np.float32)
-    if audio.ndim == 1:
-      audio = audio[:, np.newaxis]
-    timestamps = np.asarray(self._chunk_timestamps, dtype=np.float64)
-    return audio, timestamps
+def _audio_timestamps(wave: np.ndarray, sample_rate: int, block: int = 1024) -> np.ndarray:
+  n = int(np.asarray(wave).reshape(-1).size)
+  if n <= 0:
+    return np.empty((0,), dtype=np.float64)
+  step = max(1, int(block))
+  starts = np.arange(0, n, step, dtype=np.float64)
+  return starts / float(sample_rate)
 
 
 def record_dual_radar_clip(session: DualRadarSession, num_frames: int) -> tuple[np.ndarray, np.ndarray]:
@@ -192,33 +149,33 @@ def record_dual_radar_clip(session: DualRadarSession, num_frames: int) -> tuple[
   )
 
 
-def _start_modal_recorders(args):
-  camera = CameraRecorder(args.camera_device, args.camera_width, args.camera_height, args.camera_fps).start()
-  audio = None
-  if args.audio:
-    audio = AudioRecorder(
-      args.audio_device,
-      args.audio_sample_rate,
-      args.audio_channels,
-      blocksize=args.audio_blocksize,
-    ).start()
-  return camera, audio
-
-
-def _stop_modal_recorders(camera, audio):
-  camera_frames, camera_timestamps = camera.stop()
-  if audio is None:
-    return camera_frames, camera_timestamps, None, None
-  audio_samples, audio_timestamps = audio.stop()
-  return camera_frames, camera_timestamps, audio_samples, audio_timestamps
-
-
 def record_multimodal_clip_dual(session: DualRadarSession, num_frames: int, args):
-  camera, audio = _start_modal_recorders(args)
+  camera = CameraRecorder(args.camera_device, args.camera_width, args.camera_height, args.camera_fps).start()
+  audio_buf: LiveAudioBuffer | None = None
+  if args.audio:
+    audio_buf = LiveAudioBuffer(sample_rate=args.audio_sample_rate)
+    audio_buf.start(device=args.audio_device)
+    if not audio_buf.running:
+      print(f"  WARNING: mic failed ({audio_buf.last_error}) — continuing without audio")
+      audio_buf = None
+    else:
+      audio_buf.start_recording_sink()
   try:
     radar_clip, radar2_clip = record_dual_radar_clip(session, num_frames)
   finally:
-    camera_frames, camera_timestamps, audio_samples, audio_timestamps = _stop_modal_recorders(camera, audio)
+    camera_frames, camera_timestamps = camera.stop()
+    if audio_buf is None:
+      audio_samples, audio_timestamps = None, None
+    else:
+      wave = audio_buf.stop_recording_sink()
+      if wave.size == 0:
+        wave = audio_buf.snapshot()
+      audio_buf.stop()
+      if wave.ndim == 1:
+        audio_samples = wave[:, np.newaxis]
+      else:
+        audio_samples = wave
+      audio_timestamps = _audio_timestamps(wave, args.audio_sample_rate, args.audio_blocksize)
   return radar_clip, radar2_clip, camera_frames, camera_timestamps, audio_samples, audio_timestamps
 
 
@@ -312,48 +269,53 @@ def save_multimodal_clip(
 
 def _probe_cameras() -> list[dict]:
   try:
-    from realtime_multimodal import probe_camera_devices
-    from device_select import attach_camera_names, prefer_microsoft_index
-
-    cams = attach_camera_names(probe_camera_devices())
-    return cams
-  except Exception:
+    return attach_camera_names(probe_camera_devices())
+  except Exception as exc:
+    print(f"  camera probe failed: {exc}")
     return []
 
 
 def _default_camera_index() -> int:
-  try:
-    from device_select import prefer_microsoft_index
-
-    cams = _probe_cameras()
-    idx = prefer_microsoft_index(cams)
-    if idx is not None:
-      return int(idx)
-    if cams:
-      return int(cams[0]["index"])
-  except Exception:
-    pass
+  cams = _probe_cameras()
+  idx = prefer_microsoft_index(cams)
+  if idx is not None:
+    return int(idx)
+  if cams:
+    return int(cams[0]["index"])
   return 0
+
+
+def _default_audio_device(camera_label: str | None = None) -> int | str | None:
+  """Same preference as GUI: match LifeCam mic, else Microsoft name, else first ALSA/open id."""
+  devices = list_audio_input_devices()
+  if not devices:
+    return None
+  if camera_label:
+    mic = match_audio_to_camera(devices, camera_label)
+    if mic is not None:
+      return mic.get("open", mic.get("index"))
+  chosen = prefer_microsoft(devices)
+  if chosen is None:
+    chosen = devices[0]
+  return chosen.get("open", chosen.get("index"))
 
 
 def list_devices() -> None:
   print("Radar UUIDs:", list_radar_uuids() or "(none)")
   print("Radar ports:", list_radar_ports() or "(none)")
   cams = _probe_cameras()
-  print("Cameras:")
+  print("Cameras (GUI probe):")
   if not cams:
-    print("  (none / probe failed)")
+    print("  (none)")
   for cam in cams:
     print(f"  [{cam.get('index')}] {cam.get('label') or cam.get('name')}")
-  try:
-    import sounddevice as sd
+  audio_devices = list_audio_input_devices()
+  print("Audio inputs (GUI list: ALSA/arecord + optional sounddevice):")
+  if not audio_devices:
+    print("  (none — install alsa-utils / check arecord -l)")
+  for dev in audio_devices:
+    print(f"  open={dev.get('open')!r}  backend={dev.get('backend')}  {dev.get('label')}")
 
-    print("Audio inputs:")
-    for i, dev in enumerate(sd.query_devices()):
-      if int(dev.get("max_input_channels", 0)) > 0:
-        print(f"  [{i}] {dev.get('name')}")
-  except Exception as exc:
-    print(f"Audio: {exc}")
 
 
 def _open_session(args, profile: str, frame_rate_hz: float) -> DualRadarSession:
@@ -469,10 +431,13 @@ def record_session(
 def _parse_audio_device(value: str | None) -> int | str | None:
   if value is None:
     return None
+  text = value.strip()
+  if not text or text.lower() in ("default", "auto"):
+    return None
   try:
-    return int(value)
+    return int(text)
   except ValueError:
-    return value
+    return text  # plughw:1,0 / Pulse source name
 
 
 def parse_args():
@@ -492,13 +457,18 @@ def parse_args():
   p.add_argument("--radar2-uuid", type=str, default=None)
   p.add_argument("--radar1-port", type=str, default=None, help="e.g. /dev/ttyACM0")
   p.add_argument("--radar2-port", type=str, default=None, help="e.g. /dev/ttyACM1")
-  p.add_argument("--camera-device", type=int, default=None, help="V4L index; default prefers Microsoft")
+  p.add_argument("--camera-device", type=int, default=None, help="V4L/OpenCV index; default = GUI probe (prefer Microsoft)")
   p.add_argument("--camera-width", type=int, default=224)
   p.add_argument("--camera-height", type=int, default=224)
   p.add_argument("--camera-fps", type=float, default=15.0)
   p.add_argument("--no-audio", action="store_true")
   p.add_argument("--audio", action="store_true", help="Force mic on (default unless --no-audio)")
-  p.add_argument("--audio-device", type=str, default=None)
+  p.add_argument(
+    "--audio-device",
+    type=str,
+    default=None,
+    help="sounddevice index OR ALSA open id e.g. plughw:1,0 (same as GUI). Default auto-match to camera.",
+  )
   p.add_argument("--audio-sample-rate", type=int, default=16000)
   p.add_argument("--audio-channels", type=int, default=1)
   p.add_argument("--audio-blocksize", type=int, default=1024)
@@ -507,13 +477,9 @@ def parse_args():
   args = p.parse_args()
   if args.no_audio:
     args.audio = False
-  elif args.audio:
-    args.audio = True
   else:
-    args.audio = True  # mic on by default on Jetson collect
+    args.audio = True
   args.audio_device = _parse_audio_device(args.audio_device)
-  if args.camera_device is None:
-    args.camera_device = _default_camera_index()
   return args
 
 
@@ -522,6 +488,21 @@ def main():
   if args.list_devices or args.list_audio_devices:
     list_devices()
     return
+
+  cams = _probe_cameras()
+  if args.camera_device is None:
+    args.camera_device = _default_camera_index()
+  cam_label = None
+  for cam in cams:
+    if int(cam.get("index", -1)) == int(args.camera_device):
+      cam_label = str(cam.get("label") or cam.get("name") or "")
+      break
+  if args.audio and args.audio_device is None:
+    args.audio_device = _default_audio_device(cam_label)
+    print(f"Audio device auto: {args.audio_device!r}")
+  print(f"Camera device: {args.camera_device} ({cam_label or 'unlabeled'})")
+  if not cams:
+    print("WARNING: GUI camera probe found nothing — try --camera-device 0/1 after ls /dev/video*")
 
   group = args.group
   gesture = args.class_name
