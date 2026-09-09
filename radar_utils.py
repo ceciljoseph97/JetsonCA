@@ -275,6 +275,7 @@ class RadarDeviceSlot:
   algo: DopplerAlgo | None = None
   available: bool = False
   label: str = "radar"
+  last_error: str | None = None
 
 
 class DualRadarSession:
@@ -292,36 +293,43 @@ class DualRadarSession:
     mirror_radar2: bool = False,
     min_range_m: float = 0.0,
     max_range_m: float | None = None,
+    prefer_port: bool = False,
   ):
     self.num_rx = num_rx
     self.profile = profile
     self.frame_rate_hz = frame_rate_hz
     self.mirror_radar2 = mirror_radar2
+    self.prefer_port = bool(prefer_port)
     self.min_range_m = min_range_m
     self.metrics = profile_metrics(profile)
     self.max_range_m = float(max_range_m if max_range_m is not None else self.metrics["max_range_m"])
     self.uuids = list_radar_uuids()
     self.ports = list_radar_ports()
 
-    primary_uuid = radar1_uuid
-    if primary_uuid is None and self.uuids:
-      primary_uuid = self.uuids[0]
+    primary_uuid = None if radar1_uuid in (None, "", "__none__") else radar1_uuid
+    secondary_uuid = None if radar2_uuid in (None, "", "__none__") else radar2_uuid
+    primary_port = None if radar1_port in (None, "", "__none__") else radar1_port
+    secondary_port = None if radar2_port in (None, "", "__none__") else radar2_port
 
-    secondary_uuid = radar2_uuid
-    if radar2_uuid == "__none__":
-      secondary_uuid = None
-    elif secondary_uuid is None and len(self.uuids) > 1:
+    if primary_uuid is None and self.uuids and not self.prefer_port:
+      primary_uuid = self.uuids[0]
+    if secondary_uuid is None and len(self.uuids) > 1 and not self.prefer_port:
       secondary_uuid = self.uuids[1]
 
-    primary_port = None if radar1_port == "__none__" else radar1_port
-    if primary_port is None and primary_uuid is None and self.ports:
+    # Always keep port fallbacks (Jetson UUID open often fails; GUI uses ttyACM*).
+    if primary_port is None and self.ports:
       primary_port = self.ports[0]
-
-    secondary_port = None if radar2_port == "__none__" else radar2_port
-    if radar2_uuid == "__none__" or radar2_port == "__none__":
-      secondary_port = None
+    if secondary_port is None and len(self.ports) > 1:
+      secondary_port = self.ports[1]
     elif secondary_port is None and secondary_uuid is None and len(self.ports) > 1:
       secondary_port = self.ports[1]
+
+    if self.prefer_port:
+      # Port-first on Jetson: still keep UUIDs as fallback.
+      if primary_uuid is None and self.uuids:
+        primary_uuid = self.uuids[0]
+      if secondary_uuid is None and len(self.uuids) > 1:
+        secondary_uuid = self.uuids[1]
 
     self.slots: list[RadarDeviceSlot] = [
       RadarDeviceSlot(uuid=primary_uuid, port=primary_port, label="radar1"),
@@ -329,29 +337,35 @@ class DualRadarSession:
     ]
     self._devices: list[Any] = []
     self._miss_streak: list[int] = [0, 0]
+    self._last_tensors: list[torch.Tensor | None] = [None, None]
 
-  def __enter__(self) -> DualRadarSession:
+  def _open_one(self, slot: RadarDeviceSlot) -> bool:
     if DeviceFmcw is None:
-      return self
+      slot.last_error = "ifxradarsdk not importable"
+      slot.available = False
+      return False
 
-    open_plan: list[tuple[RadarDeviceSlot, str, str | None]] = [
-      (self.slots[0], "uuid", self.slots[0].uuid),
-      (self.slots[1], "uuid", self.slots[1].uuid),
-    ]
-    if self.slots[0].uuid is None and self.slots[0].port is not None:
-      open_plan[0] = (self.slots[0], "port", self.slots[0].port)
-    elif self.slots[0].uuid is None:
-      open_plan[0] = (self.slots[0], "default", "__default__")
-    if self.slots[1].uuid is None and self.slots[1].port is not None:
-      open_plan[1] = (self.slots[1], "port", self.slots[1].port)
+    attempts: list[tuple[str, str]] = []
+    if self.prefer_port:
+      if slot.port:
+        attempts.append(("port", slot.port))
+      if slot.uuid:
+        attempts.append(("uuid", slot.uuid))
+    else:
+      if slot.uuid:
+        attempts.append(("uuid", slot.uuid))
+      if slot.port:
+        attempts.append(("port", slot.port))
+    if slot.label == "radar1" and not attempts:
+      attempts.append(("default", "__default__"))
 
-    for slot, open_kind, target in open_plan:
-      if target is None:
-        continue
+    errors: list[str] = []
+    for kind, target in attempts:
+      device = None
       try:
-        if open_kind == "default":
+        if kind == "default":
           device = DeviceFmcw()
-        elif open_kind == "port":
+        elif kind == "port":
           device = DeviceFmcw(port=target)
         else:
           device = DeviceFmcw(uuid=target)
@@ -364,9 +378,32 @@ class DualRadarSession:
         slot.device = device
         slot.algo = DopplerAlgo(cfg, self.num_rx)
         slot.available = True
+        slot.last_error = None
+        if kind == "port":
+          slot.port = target
+        if kind == "uuid":
+          slot.uuid = target
         self._devices.append(device)
-      except Exception:
-        slot.available = False
+        return True
+      except Exception as exc:
+        errors.append(f"{kind}={target}: {exc}")
+        if device is not None:
+          try:
+            device.close()
+          except Exception:
+            pass
+    slot.available = False
+    slot.last_error = " | ".join(errors) if errors else "no open method"
+    return False
+
+  def __enter__(self) -> DualRadarSession:
+    if DeviceFmcw is None:
+      for slot in self.slots:
+        slot.last_error = "ifxradarsdk not importable"
+      return self
+
+    self._open_one(self.slots[0])
+    self._open_one(self.slots[1])
 
     if not self.slots[0].available and self.slots[1].available:
       self.slots[0], self.slots[1] = self.slots[1], self.slots[0]
@@ -400,6 +437,18 @@ class DualRadarSession:
     )
     return f"radar1={r1}/{live1} radar2={r2}/{live2}"
 
+  def diagnose(self) -> str:
+    lines = [
+      f"uuids={self.uuids or '(none)'} ports={self.ports or '(none)'} "
+      f"profile={self.profile} fps={self.frame_rate_hz} prefer_port={self.prefer_port}"
+    ]
+    for slot in self.slots:
+      lines.append(
+        f"  {slot.label}: available={slot.available} uuid={slot.uuid} port={slot.port} "
+        f"err={slot.last_error or '-'}"
+      )
+    return "\n".join(lines)
+
   def set_mirror_radar2(self, enabled: bool):
     self.mirror_radar2 = bool(enabled)
 
@@ -409,8 +458,6 @@ class DualRadarSession:
 
   def read_tensors(self) -> tuple[torch.Tensor | None, torch.Tensor | None]:
     tensors: list[torch.Tensor | None] = [None, None]
-    if not hasattr(self, "_last_tensors"):
-      self._last_tensors = [None, None]
     for idx, slot in enumerate(self.slots):
       if not slot.available or slot.device is None or slot.algo is None:
         self._miss_streak[idx] += 1

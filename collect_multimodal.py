@@ -316,9 +316,21 @@ def list_devices() -> None:
   for dev in audio_devices:
     print(f"  open={dev.get('open')!r}  backend={dev.get('backend')}  {dev.get('label')}")
 
+  print("\nRadar open probe (port-first, same as collect default on Jetson):")
+  with DualRadarSession(
+    num_rx=3,
+    profile="gesture",
+    frame_rate_hz=5.0,
+    mirror_radar2=False,
+    prefer_port=True,
+  ) as session:
+    print(session.diagnose())
+    print("status:", session.status_text)
 
 
 def _open_session(args, profile: str, frame_rate_hz: float) -> DualRadarSession:
+  # Jetson: prefer /dev/ttyACM* (GUI often uses ports); UUID open is flaky.
+  prefer_port = not bool(args.radar1_uuid or args.radar2_uuid)
   return DualRadarSession(
     num_rx=args.num_rx,
     profile=profile,
@@ -330,6 +342,7 @@ def _open_session(args, profile: str, frame_rate_hz: float) -> DualRadarSession:
     mirror_radar2=False,
     min_range_m=args.min_range_m,
     max_range_m=args.max_range_m,
+    prefer_port=prefer_port,
   )
 
 
@@ -363,26 +376,33 @@ def record_session(
   print(f"Radar ports: {ports if ports else 'none'}\n")
   if len(uuids) < 2 and len(ports) < 2:
     raise SystemExit(
-      f"Need two BGT60 radars (mirroring disabled); uuids={uuids} ports={ports}"
+      f"Need two BGT60 radars (mirroring disabled); uuids={uuids} ports={ports}\n"
+      "Check: ls /dev/ttyACM* ; close GUI if it holds the devices."
     )
 
-  for n in range(count):
-    if args.no_prompt:
-      print(f"\nClip {n + 1}/{count} — perform '{gesture}' in 3s...")
-    else:
-      input(f"\nClip {n + 1}/{count} — perform '{gesture}', press Enter when ready...")
-    for t in range(3, 0, -1):
-      print(f"  {t}...")
-      time.sleep(1)
-    print("  RECORDING")
-    try:
-      idx = next_index(class_dir)
-      with _open_session(args, profile, frame_rate_hz) as session:
-        if not (session.slots[0].available and session.slots[1].available):
-          raise RuntimeError(
-            "Need two live BGT60 radars (mirroring disabled). "
-            f"uuids={uuids} ports={ports} status={session.status_text}"
-          )
+  # Keep one session for all clips (GUI does this; reopen-per-clip → missing).
+  with _open_session(args, profile, frame_rate_hz) as session:
+    print(session.diagnose())
+    if not (session.slots[0].available and session.slots[1].available):
+      raise SystemExit(
+        "Need two live BGT60 radars (mirroring disabled).\n"
+        f"{session.diagnose()}\n"
+        "Try: --radar1-port /dev/ttyACM0 --radar2-port /dev/ttyACM1\n"
+        "Or close gui_app.py / other SDK users holding the radars."
+      )
+    print(f"Radars ready: {session.status_text}\n")
+
+    for n in range(count):
+      if args.no_prompt:
+        print(f"\nClip {n + 1}/{count} — perform '{gesture}' in 3s...")
+      else:
+        input(f"\nClip {n + 1}/{count} — perform '{gesture}', press Enter when ready...")
+      for t in range(3, 0, -1):
+        print(f"  {t}...")
+        time.sleep(1)
+      print("  RECORDING")
+      try:
+        idx = next_index(class_dir)
         (
           radar_clip,
           radar2_clip,
@@ -418,14 +438,14 @@ def record_session(
           f"camera={paths[3].name} audio={paths[4].name} meta={paths[5].name} "
           f"r1={radar_clip.shape} r2={radar2_clip.shape} cam={camera_frames.shape}"
         )
-    except ErrorFrameAcquisitionFailed:
-      print("  FRAME DROP — clip skipped. Lower --frame-rate or check USB power.")
-    except RuntimeError as exc:
-      print(f"  SENSOR ERROR — {exc}")
-      break
-    except ImportError as exc:
-      print(f"  AUDIO ERROR — {exc}")
-      break
+      except ErrorFrameAcquisitionFailed:
+        print("  FRAME DROP — clip skipped. Lower --frame-rate or check USB power.")
+      except RuntimeError as exc:
+        print(f"  SENSOR ERROR — {exc}")
+        break
+      except ImportError as exc:
+        print(f"  AUDIO ERROR — {exc}")
+        break
 
 
 def _parse_audio_device(value: str | None) -> int | str | None:
@@ -448,7 +468,7 @@ def parse_args():
   p.add_argument("--count", type=int, default=None, help="Clips to record (skip interactive count)")
   p.add_argument("--no-prompt", action="store_true", help="No Enter between clips (3s countdown only)")
   p.add_argument("--frames", type=int, default=40)
-  p.add_argument("--frame-rate", type=float, default=10.0)
+  p.add_argument("--frame-rate", type=float, default=5.0)
   p.add_argument("--num-rx", type=int, default=3)
   p.add_argument("--radar-profile", choices=("safe", "balanced", "gesture"), default="gesture")
   p.add_argument("--min-range-m", type=float, default=0.0)
