@@ -278,7 +278,7 @@ class RadarDeviceSlot:
 
 
 class DualRadarSession:
-  """Open up to two BGT60 devices; optional mirror radar1 into radar2 when only one is present."""
+  """Open up to two BGT60 devices. Mirroring radar1→radar2 is opt-in (off by default)."""
 
   def __init__(
     self,
@@ -289,7 +289,7 @@ class DualRadarSession:
     radar2_uuid: str | None = None,
     radar1_port: str | None = None,
     radar2_port: str | None = None,
-    mirror_radar2: bool = True,
+    mirror_radar2: bool = False,
     min_range_m: float = 0.0,
     max_range_m: float | None = None,
   ):

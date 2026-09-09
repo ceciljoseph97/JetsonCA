@@ -1316,7 +1316,7 @@ def run_benchmark(args) -> dict[str, Any]:
           radar2_uuid=args.radar2_uuid,
           radar1_port=args.radar1_port,
           radar2_port=args.radar2_port,
-          mirror_radar2=not args.no_mirror_radar2,
+          mirror_radar2=args.mirror_radar2,
           min_range_m=args.min_range_m,
           max_range_m=args.max_range_m,
           audio_device=getattr(args, "audio_device", None),
@@ -1751,7 +1751,9 @@ def parse_args():
   parser.add_argument("--radar2-uuid", type=str, default=None, help="Live mode both: optional secondary radar UUID or __none__")
   parser.add_argument("--radar1-port", type=str, default=None, help="Live mode both: optional primary radar port, e.g. /dev/ttyACM0")
   parser.add_argument("--radar2-port", type=str, default=None, help="Live mode both: optional secondary radar port or __none__")
-  parser.add_argument("--no-mirror-radar2", action="store_true", help="Live mode both: do not mirror radar1 when radar2 is missing")
+  parser.add_argument("--mirror-radar2", action="store_true", help="Live mode both: mirror radar1 when radar2 is missing (off by default)")
+  parser.add_argument("--no-mirror-radar2", action="store_false", dest="mirror_radar2", help="Keep dual-radar mirror disabled (default)")
+  parser.set_defaults(mirror_radar2=False)
   parser.add_argument("--min-range-m", type=float, default=0.0, help="Live mode both: minimum radar range gate in meters")
   parser.add_argument("--max-range-m", type=float, default=None, help="Live mode both: maximum radar range gate in meters")
   parser.add_argument("--system-monitor", action="store_true", help="Sample CPU/RAM and tegrastats during benchmark")

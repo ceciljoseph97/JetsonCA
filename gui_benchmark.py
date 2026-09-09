@@ -42,7 +42,7 @@ def make_gui_bench_args(**overrides: Any) -> argparse.Namespace:
     radar2_uuid=None,
     radar1_port=None,
     radar2_port=None,
-    no_mirror_radar2=False,
+    no_mirror_radar2=True,
     min_range_m=0.0,
     max_range_m=None,
     system_monitor=True,

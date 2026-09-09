@@ -56,7 +56,8 @@ def parse_args():
   p.add_argument("--radar2-uuid", type=str, default=None)
   p.add_argument("--radar1-port", type=str, default=None, help="Optional primary radar port, e.g. /dev/ttyACM0")
   p.add_argument("--radar2-port", type=str, default=None, help="Optional secondary radar port or __none__")
-  p.add_argument("--mirror-radar2", action="store_true", default=True)
+  p.add_argument("--mirror-radar2", action="store_true", default=False,
+                 help="Opt-in: copy radar1 into radar2 when second HW unit is missing")
   p.add_argument("--no-mirror-radar2", action="store_false", dest="mirror_radar2")
   p.add_argument("--no-radar", action="store_true", help="Camera-only live: skip radar SDK, radar_present=False")
   p.add_argument("--dual-radar-fuse", choices=("auto", "none", "mean", "max"), default="auto")

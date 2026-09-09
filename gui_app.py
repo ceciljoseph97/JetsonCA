@@ -1906,7 +1906,7 @@ class JetsonGuiApp:
       "radar2_uuid": _parse_radar_uuid_choice(self.radar2_uuid_var.get()),
       "radar1_port": getattr(self.args, "radar1_port", None),
       "radar2_port": getattr(self.args, "radar2_port", None),
-      "no_mirror_radar2": not bool(getattr(self.args, "mirror_radar2", True)),
+      "no_mirror_radar2": not bool(getattr(self.args, "mirror_radar2", False)),
       "min_range_m": min_r,
       "max_range_m": max_r,
       "n_radars": 0 if bool(getattr(self.args, "no_radar", False)) else 2,
@@ -2011,7 +2011,8 @@ def parse_args():
   p.add_argument("--frame-rate", type=float, default=5.0)
   p.add_argument("--radar1-port", type=str, default=None)
   p.add_argument("--radar2-port", type=str, default=None)
-  p.add_argument("--mirror-radar2", action="store_true", default=True)
+  p.add_argument("--mirror-radar2", action="store_true", default=False,
+                 help="Opt-in: copy radar1 into radar2 when second HW unit is missing")
   p.add_argument("--no-mirror-radar2", action="store_false", dest="mirror_radar2")
   p.add_argument("--no-radar", action="store_true", help="Camera-only: skip radar SDK")
   p.add_argument("--dual-radar-fuse", choices=("auto", "none", "mean", "max"), default="auto",
