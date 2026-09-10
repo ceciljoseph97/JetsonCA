@@ -1,5 +1,23 @@
 #!/usr/bin/env python3
-"""Simplified Testing + Realtime GUI (Crossattention subset) for Jetson / desktop."""
+"""Jetson Testing + Realtime GUI (Crossattention subset).
+
+Usage (from 4_code/JetsonCA):
+
+  # HAR (USB cam + dual BGT + mic if ckpt has audio)
+  python gui_app.py
+  python gui_app.py --device cuda --radar-profile safe
+  python gui_app.py --checkpoint artifacts/walking_bg_audio_v1/best_multimodal_crossattention.pt
+  python gui_app.py --no-audio --no-radar
+
+  # gestureEdge 3-class drive (Push=left 1 lane, Pull=right 1 lane, Hold=stay)
+  python gui_app.py --gesture-edge
+  python gui_app.py --gesture-edge --device cuda
+  python gui_app.py --gesture-edge --gui-geometry 800x480+0+0
+  python gui_app.py --gesture-edge --gesture-edge-checkpoint artifacts/gesture_edge_soli/best_gesture_edge.pt
+
+  python gui_app.py --radar-profile {safe,balanced,gesture} --frame-rate 5 --window 30
+  python gui_app.py --radar1-uuid UUID --radar2-uuid UUID --radar1-port /dev/ttyACM0 --radar2-port /dev/ttyACM1
+"""
 
 from __future__ import annotations
 
@@ -2053,13 +2071,25 @@ def parse_args():
   p.add_argument(
     "--gesture-edge",
     action="store_true",
-    help="Launch gestureEdge GUI (Soli CNN+LSTM + dual cross-attn) instead of multimodal HAR",
+    help="Launch gestureEdge GUI (3-class Push/Pull/Palm Hold drive) instead of multimodal HAR",
   )
   p.add_argument(
     "--gesture-edge-checkpoint",
     type=Path,
     default=Path("artifacts/gesture_edge_soli/best_gesture_edge.pt"),
     help="Checkpoint for --gesture-edge mode",
+  )
+  p.add_argument(
+    "--gesture-edge-bgt-data",
+    type=Path,
+    default=Path("artifacts/gesture_edge_bgt"),
+    help="Live BGT clip folder for gestureEdge Collect tab / finetune",
+  )
+  p.add_argument(
+    "--gui-geometry",
+    type=str,
+    default=None,
+    help="Tk geometry WxH+X+Y (default: fit screen). Example: 800x480+0+0",
   )
   p.add_argument("--radar1-uuid", type=str, default=None)
   p.add_argument("--radar2-uuid", type=str, default=None)

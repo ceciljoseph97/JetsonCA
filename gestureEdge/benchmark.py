@@ -239,7 +239,7 @@ def format_profile_report(report: dict[str, Any]) -> str:
   flags = report.get("profiling") or {}
   plat = report.get("platform") or {}
   lines = [
-    f"model       gestureEdge (CNN+LSTM dual)",
+    f"model       gestureEdge ({report.get('config', {}).get('arch') or 'cnn_lstm_cross_dual'})",
     f"checkpoint  {report.get('checkpoint')}",
     f"device      {report.get('device')}  gpu={plat.get('gpu_name') or 'cpu'}",
     f"platform    {plat.get('hostname')}  {plat.get('os')}",

@@ -45,6 +45,7 @@ Edge runtime matches the lab model contract:
 | `JetsonCA_architecture_crossattention.png` | Same 4-stream net as Crossattention (cam + radar1/2 + audio in xattn) |
 | `JetsonCA_architecture_edge_pipeline.png` | Live path: LifeCam RGB+mic, dual BGT, DETECT + motion gate |
 | `JetsonCA_shared_latent_and_loss.png` | `shared_proj` fusion + Crossattention `train.py` objective |
+| `GestureRadarMonoModal_*.png` | Dual-radar gestureEdge (CNN↔MHA↔LSTM); GUI `--gesture-edge` |
 
 ```bash
 # default: walking_bg_audio_v1 (audio + DETECT)

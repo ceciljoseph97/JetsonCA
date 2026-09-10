@@ -12,7 +12,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-from .preprocess import SOLI_LABELS, soli_clip_to_tensor, window_clip
+from .preprocess import SOLI_LABELS, soli_clip_to_tensor, window_clip, DRIVE_LABELS, DRIVE_SLUGS
 
 
 @dataclass(frozen=True)
@@ -27,7 +27,12 @@ def _is_zip(path: Path) -> bool:
   return path.is_file() and path.suffix.lower() == ".zip"
 
 
-def index_soli(data_path: Path, *, max_label: int = 10) -> list[SoliRef]:
+def index_soli(
+  data_path: Path,
+  *,
+  max_label: int = 10,
+  allowed: set[int] | None = None,
+) -> list[SoliRef]:
   data_path = Path(data_path).resolve()
   refs: list[SoliRef] = []
   if _is_zip(data_path):
@@ -49,6 +54,8 @@ def index_soli(data_path: Path, *, max_label: int = 10) -> list[SoliRef]:
     except ValueError:
       continue
     if gesture < 0 or gesture > max_label:
+      continue
+    if allowed is not None and gesture not in allowed:
       continue
     refs.append(SoliRef(key=name, gesture=gesture, session=parts[1], rep=parts[2]))
   if not refs:
@@ -76,11 +83,13 @@ class SoliGestureDataset(Dataset):
     window: int = 40,
     train: bool = False,
     seed: int = 0,
+    label_map: dict[int, int] | None = None,
   ):
     self.data_path = Path(data_path)
     self.refs = list(refs)
     self.window = int(window)
     self.train = bool(train)
+    self.label_map = dict(label_map) if label_map else None
     self._rng = np.random.default_rng(seed)
     self._zip = zipfile.ZipFile(self.data_path) if _is_zip(self.data_path) else None
 
@@ -119,15 +128,118 @@ class SoliGestureDataset(Dataset):
       radar2 = radar1 + 0.01 * torch.randn_like(radar1)
     else:
       radar2 = radar1
+    gid = int(ref.gesture)
+    label = int(self.label_map[gid]) if self.label_map is not None else gid
     return {
       "radar1": radar1,
       "radar2": radar2,
       "radar1_present": True,
       "radar2_present": True,
-      "label": int(ref.gesture),
+      "label": label,
     }
 
   def close(self):
     if self._zip is not None:
       self._zip.close()
       self._zip = None
+
+
+def _slug_to_label(slug: str) -> int | None:
+  key = slug.replace(" ", "_").lower()
+  for i, name in enumerate(DRIVE_SLUGS):
+    if name.lower() == key or DRIVE_LABELS[i].lower() == slug.lower():
+      return i
+  return None
+
+
+def index_bgt_drive(root: Path) -> list[tuple[Path, int]]:
+  root = Path(root)
+  if not root.is_dir():
+    raise FileNotFoundError(f"No BGT drive clips under {root}")
+  out: list[tuple[Path, int]] = []
+  for path in sorted(root.rglob("*.npz")):
+    lab = _slug_to_label(path.parent.name)
+    if lab is None:
+      continue
+    out.append((path, lab))
+  if not out:
+    raise FileNotFoundError(f"No Push/Pull/Palm_Hold .npz under {root}")
+  return out
+
+
+def split_bgt_files(
+  files: list[tuple[Path, int]],
+  *,
+  val_ratio: float = 0.2,
+  seed: int = 0,
+) -> tuple[list[tuple[Path, int]], list[tuple[Path, int]]]:
+  by: dict[int, list[tuple[Path, int]]] = {}
+  for item in files:
+    by.setdefault(item[1], []).append(item)
+  rng = np.random.default_rng(seed)
+  train: list[tuple[Path, int]] = []
+  val: list[tuple[Path, int]] = []
+  for lab in sorted(by):
+    items = list(by[lab])
+    rng.shuffle(items)
+    n = len(items)
+    if n <= 1:
+      train.extend(items)
+      continue
+    n_val = max(1, int(round(n * val_ratio)))
+    n_val = min(n_val, n - 1)
+    val.extend(items[:n_val])
+    train.extend(items[n_val:])
+  if not train:
+    raise RuntimeError("no BGT train clips")
+  if not val:
+    val = list(train)
+  return train, val
+
+
+class BgtDriveDataset(Dataset):
+  """Live BGT clips saved as npz (T,3,32,32) per radar."""
+
+  def __init__(
+    self,
+    files: list[tuple[Path, int]],
+    *,
+    window: int = 40,
+    train: bool = False,
+    seed: int = 0,
+  ):
+    self.files = list(files)
+    self.window = int(window)
+    self.train = bool(train)
+    self._rng = np.random.default_rng(seed)
+
+  def __len__(self) -> int:
+    return len(self.files)
+
+  def __getitem__(self, index: int) -> dict:
+    path, label = self.files[index]
+    z = np.load(path)
+    r1 = torch.from_numpy(np.asarray(z["radar1"], dtype=np.float32))
+    if "radar2" in z.files:
+      r2 = torch.from_numpy(np.asarray(z["radar2"], dtype=np.float32))
+    else:
+      r2 = r1
+    if r1.ndim == 3:
+      r1 = r1.unsqueeze(0)
+    if r2.ndim == 3:
+      r2 = r2.unsqueeze(0)
+    r1 = window_clip(r1, window=self.window, train=self.train, rng=self._rng)
+    r2 = window_clip(r2, window=self.window, train=self.train, rng=self._rng)
+    if self.train and float(self._rng.random()) < 0.3:
+      r1 = (r1 + 0.02 * torch.randn_like(r1)).clamp(0, 1)
+      r2 = (r2 + 0.02 * torch.randn_like(r2)).clamp(0, 1)
+    return {
+      "radar1": r1,
+      "radar2": r2,
+      "radar1_present": True,
+      "radar2_present": True,
+      "label": int(label),
+    }
+
+  def close(self):
+    return

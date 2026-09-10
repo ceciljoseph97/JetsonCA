@@ -23,6 +23,11 @@ SOLI_ID_TO_NAME: dict[int, str] = {
   11: "Background",
 }
 SOLI_LABELS = tuple(SOLI_ID_TO_NAME[i] for i in range(11))
+# Drive / 3-class subset (Soli file IDs).
+DRIVE_SOLI_IDS: tuple[int, ...] = (6, 7, 10)  # Push, Pull, Palm Hold
+DRIVE_LABELS: tuple[str, ...] = tuple(SOLI_ID_TO_NAME[i] for i in DRIVE_SOLI_IDS)
+DRIVE_ID_TO_CLASS: dict[int, int] = {gid: i for i, gid in enumerate(DRIVE_SOLI_IDS)}
+DRIVE_SLUGS: tuple[str, ...] = tuple(n.replace(" ", "_") for n in DRIVE_LABELS)
 FRAME_HW = (32, 32)
 
 
