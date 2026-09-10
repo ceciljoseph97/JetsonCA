@@ -2050,12 +2050,33 @@ def parse_args():
     default=None,
     help="Default session recording path (MP4). Enable via GUI checkbox.",
   )
+  p.add_argument(
+    "--gesture-edge",
+    action="store_true",
+    help="Launch gestureEdge GUI (Soli CNN+LSTM + dual cross-attn) instead of multimodal HAR",
+  )
+  p.add_argument(
+    "--gesture-edge-checkpoint",
+    type=Path,
+    default=Path("artifacts/gesture_edge_soli/best_gesture_edge.pt"),
+    help="Checkpoint for --gesture-edge mode",
+  )
+  p.add_argument("--radar1-uuid", type=str, default=None)
+  p.add_argument("--radar2-uuid", type=str, default=None)
   return p.parse_args()
 
 
 def main():
   args = parse_args()
   apply_jetson_runtime_tweaks()
+  if args.gesture_edge:
+    from gestureEdge.gui import run_gesture_edge_gui
+
+    # Jetson DualRadarSession prefers ttyACM ports.
+    if not hasattr(args, "prefer_port"):
+      args.prefer_port = True
+    run_gesture_edge_gui(args)
+    return
   app = JetsonGuiApp(args)
   if args.record is not None:
     app.record_path_var.set(str(args.record))

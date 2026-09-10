@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """Collect dual BGT60 + camera + mic clips on Jetson into Crossattention-compatible layout.
 
+Aligned with JetsonCA gui_app.py defaults:
+  - radar-profile safe (FoV ~4.8 m) — NOT gesture (~1 m) unless hands-only
+  - frame-rate 5 Hz, same cam/mic discovery as the GUI
+  Close gui_app / other SDK users before collecting (exclusive USB).
+
 Uses the same camera/audio discovery as gui_app.py:
   - jetson_env.ensure_conda_lib_path (cv2 CXXABI)
   - realtime_multimodal.open_video_capture / probe_camera_devices
@@ -9,12 +14,14 @@ Uses the same camera/audio discovery as gui_app.py:
 Layout (same as Crossattention/train.py):
   data/{group}/{class}/{radar,radar1,radar2,camera,audio,meta}/{idx:02d}.npy|.json
 
-Examples (on Jetson):
+Examples (on Jetson) — walking / background first:
   python collect_multimodal.py --list-devices
-  python collect_multimodal.py --radar-profile gesture --frames 40 --frame-rate 10 \\
-    --group gestures --class push --count 20
+  python collect_multimodal.py --group walking --class background --count 40
+  python collect_multimodal.py --group walking --class walking --count 40
+  # hands-only (snap/wave): explicit gesture profile, stay <~1 m
+  python collect_multimodal.py --radar-profile gesture --group gestures --class waving --count 20
   python collect_multimodal.py --radar1-port /dev/ttyACM0 --radar2-port /dev/ttyACM1 \\
-    --class pinch_index --count 15
+    --group walking --class walking --count 15
 """
 
 from __future__ import annotations
@@ -446,8 +453,18 @@ def record_session(
   class_dir.mkdir(parents=True, exist_ok=True)
   uuids = list_radar_uuids()
   ports = list_radar_ports()
+  metrics = profile_metrics(profile)
   print(f"\nRecording -> {class_dir}")
-  print(f"Profile={profile}, {frames} frames/clip (~{frames / frame_rate_hz:.1f}s @ {frame_rate_hz} Hz)")
+  print(
+    f"Profile={profile} (max_range≈{metrics['max_range_m']:.1f} m, "
+    f"res≈{metrics['range_resolution_m']:.3f} m), "
+    f"{frames} frames/clip (~{frames / frame_rate_hz:.1f}s @ {frame_rate_hz} Hz)"
+  )
+  if profile == "gesture" and gesture.lower() in ("walking", "background", "walk"):
+    print(
+      "WARNING: gesture profile FoV ≈1 m — poor for walking/bg. "
+      "Prefer default --radar-profile safe (matches gui_app)."
+    )
   print(f"Camera={args.camera_device} {args.camera_width}x{args.camera_height} @ {args.camera_fps} fps")
   if args.audio:
     dev = "default" if args.audio_device is None else args.audio_device
@@ -458,7 +475,10 @@ def record_session(
   else:
     print("Audio=disabled")
   print(f"Radar UUIDs: {uuids if uuids else 'none'}")
-  print(f"Radar ports: {ports if ports else 'none'}\n")
+  print(f"Radar ports: {ports if ports else 'none'}")
+  print(
+    f"GUI match: python gui_app.py --radar-profile {profile} --frame-rate {frame_rate_hz}\n"
+  )
   if len(uuids) < 2 and len(ports) < 2:
     raise SystemExit(
       f"Need two BGT60 radars (mirroring disabled); uuids={uuids} ports={ports}\n"
@@ -587,15 +607,31 @@ def _parse_audio_device(value: str | None) -> int | str | None:
 def parse_args():
   p = argparse.ArgumentParser(description="Jetson: collect dual-radar + camera + audio clips")
   p.add_argument("--out", type=Path, default=DEFAULT_OUT)
-  p.add_argument("--group", type=str, default="gestures", help="Top folder under --out")
-  p.add_argument("--class", dest="class_name", type=str, default=None, help="Class folder (e.g. push)")
+  p.add_argument(
+    "--group",
+    type=str,
+    default="walking",
+    help="Top folder under --out (default walking — matches gui_app / train priority)",
+  )
+  p.add_argument(
+    "--class",
+    dest="class_name",
+    type=str,
+    default=None,
+    help="Class folder (e.g. walking, background, waving, snapping)",
+  )
   p.add_argument("--count", type=int, default=None, help="Clips to record (skip interactive count)")
   p.add_argument("--no-prompt", action="store_true", help="No Enter between clips (3s countdown only)")
   p.add_argument("--frames", type=int, default=40)
   p.add_argument("--frame-rate", type=float, default=5.0)
   p.add_argument("--radar-warmup", type=int, default=10, help="Discard N radar frames before each clip")
   p.add_argument("--num-rx", type=int, default=3)
-  p.add_argument("--radar-profile", choices=("safe", "balanced", "gesture"), default="gesture")
+  p.add_argument(
+    "--radar-profile",
+    choices=("safe", "balanced", "gesture"),
+    default="safe",
+    help="Must match gui_app --radar-profile (default safe ≈4.8 m; gesture ≈1 m hands-only)",
+  )
   p.add_argument("--min-range-m", type=float, default=0.0)
   p.add_argument("--max-range-m", type=float, default=None)
   p.add_argument("--radar1-uuid", type=str, default=None)
@@ -654,9 +690,9 @@ def main():
   count = args.count
   if gesture is None:
     group = input(f"Group folder name [{group}]: ").strip() or group
-    gesture = input("Class folder name (e.g. push): ").strip()
+    gesture = input("Class folder name (e.g. walking / background): ").strip()
   if not gesture:
-    raise SystemExit("Class name required (--class push).")
+    raise SystemExit("Class name required (--class walking).")
   if count is None:
     try:
       count = int(input("How many clips to record? [20]: ").strip() or "20")
@@ -675,10 +711,12 @@ def main():
     args=args,
   )
   print(f"\nDone. Data in {args.out.resolve()}")
-  print("Copy to PC Crossattention, then:")
+  print("Close collect before GUI. Same radar settings:")
+  print(f"  python gui_app.py --radar-profile {args.radar_profile} --frame-rate {args.frame_rate}")
+  print("Copy to PC Crossattention, then e.g.:")
   print(
-    f"  python train.py --data <path> --only-labels background push pull pinch_index palm_tilt swipe "
-    f"--balance undersample --audio --out artifacts/gestures_dual"
+    f"  python train.py --data <path> --only-labels background walking "
+    f"--balance undersample --audio --out artifacts/walking_bg_audio_v1"
   )
 
 
