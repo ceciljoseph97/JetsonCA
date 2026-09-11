@@ -176,9 +176,19 @@ class Worker:
     cal_path = Path(getattr(args, "gesture_edge_bgt_data", None) or "artifacts/gesture_edge_bgt") / "infer_calibrate.pt"
     if cal_path.is_file() and self._hold_idx is not None:
       try:
-        self._cal, self._cal_mu, self._cal_sd, meta = load_calibrator(cal_path, "cpu")
-        self.backend = f"{self.backend}+cal"
-        print(f"infer calibrator {cal_path} acc={meta.get('train_acc')}", flush=True)
+        cal, mu, sd, meta = load_calibrator(cal_path, "cpu")
+        n_in = int(meta.get("n_in") or np.asarray(mu).size)
+        n_out = int(meta.get("n_out") or 0)
+        need_in = len(self.labels) + 6
+        if n_in != need_in or n_out != len(self.labels) or int(np.asarray(mu).size) != n_in:
+          print(
+            f"infer calibrator skipped: {cal_path} is {n_in}→{n_out}, ckpt is {len(self.labels)}-class",
+            flush=True,
+          )
+        else:
+          self._cal, self._cal_mu, self._cal_sd = cal, mu, sd
+          self.backend = f"{self.backend}+cal"
+          print(f"infer calibrator {cal_path} acc={meta.get('train_acc')}", flush=True)
       except Exception as exc:
         print(f"infer calibrator skipped: {exc}", flush=True)
     self.state: dict[str, Any] = {
@@ -327,9 +337,10 @@ class Worker:
     if self._cal is not None:
       r1n = self._stack_window(src1).numpy()
       feat = feat_from_clip(logits, r1n)
-      cal_p = apply_calibrator(self._cal, self._cal_mu, self._cal_sd, feat)
-      if cal_p.size == probs.size:
-        probs = cal_p
+      if feat.size == int(np.asarray(self._cal_mu).size):
+        cal_p = apply_calibrator(self._cal, self._cal_mu, self._cal_sd, feat)
+        if cal_p.size == probs.size:
+          probs = cal_p
     i = int(probs.argmax())
     pred = self.labels[i]
     if self.debouncer is not None:

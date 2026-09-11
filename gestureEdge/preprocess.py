@@ -28,6 +28,10 @@ DRIVE_SOLI_IDS: tuple[int, ...] = (6, 7, 10)  # Push, Pull, Palm Hold
 DRIVE_LABELS: tuple[str, ...] = tuple(SOLI_ID_TO_NAME[i] for i in DRIVE_SOLI_IDS)
 DRIVE_ID_TO_CLASS: dict[int, int] = {gid: i for i, gid in enumerate(DRIVE_SOLI_IDS)}
 DRIVE_SLUGS: tuple[str, ...] = tuple(n.replace(" ", "_") for n in DRIVE_LABELS)
+# BGT finetune / Collect: same 3 + Palm Tilt as class 3 (keeps 3-class head rows).
+BGT_SOLI_IDS: tuple[int, ...] = (6, 7, 10, 1)
+BGT_LABELS: tuple[str, ...] = tuple(SOLI_ID_TO_NAME[i] for i in BGT_SOLI_IDS)
+BGT_SLUGS: tuple[str, ...] = tuple(n.replace(" ", "_") for n in BGT_LABELS)
 FRAME_HW = (32, 32)
 
 

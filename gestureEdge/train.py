@@ -7,9 +7,9 @@
   # all 11 Soli gestures
   python gestureEdge/train.py --all-soli --epochs 30 --device cuda
 
-  # finetune on live BGT clips (after collect_drive / GUI Collect tab)
+  # finetune on live BGT clips: Push / Pull / Palm Hold / Palm Tilt
   python gestureEdge/train.py --finetune artifacts/gesture_edge_soli/best_gesture_edge.pt \\
-    --bgt-data artifacts/gesture_edge_bgt --epochs 20 --lr 1e-4 --freeze-cnn \\
+    --bgt-data artifacts/gesture_edge_bgt --epochs 20 --lr 1e-4 --no-freeze-cnn \\
     --out artifacts/gesture_edge_bgt --device cuda
 """
 
@@ -38,7 +38,15 @@ from gestureEdge.dataset import (
   split_by_session,
 )
 from gestureEdge.model import GestureEdgeNet
-from gestureEdge.preprocess import DRIVE_ID_TO_CLASS, DRIVE_LABELS, DRIVE_SOLI_IDS, SOLI_LABELS, soli_name
+from gestureEdge.preprocess import (
+  BGT_LABELS,
+  BGT_SOLI_IDS,
+  DRIVE_ID_TO_CLASS,
+  DRIVE_LABELS,
+  DRIVE_SOLI_IDS,
+  SOLI_LABELS,
+  soli_name,
+)
 
 
 def _acc(logits, labels):
@@ -132,7 +140,7 @@ def parse_args():
     "--bgt-data",
     type=Path,
     default=Path("artifacts/gesture_edge_bgt"),
-    help="Folder of Push/Pull/Palm_Hold *.npz from collect_drive / GUI Collect",
+    help="Folder of Push/Pull/Palm_Hold/Palm_Tilt *.npz from collect_drive / GUI Collect",
   )
   p.add_argument(
     "--freeze-cnn",
@@ -181,6 +189,32 @@ def _loop(model, train_loader, val_loader, optim, sched, args, labels, cfg, best
   return best, history
 
 
+def _copy_head_rows(dst: torch.Tensor, src: torch.Tensor) -> torch.Tensor:
+  out = dst.clone()
+  n = min(int(dst.shape[0]), int(src.shape[0]))
+  out[:n] = src[:n]
+  return out
+
+
+def _load_finetune_state(model: GestureEdgeNet, state: dict, src_classes: int) -> None:
+  dst_classes = int(model.num_classes)
+  if src_classes == dst_classes:
+    model.load_state_dict(state, strict=True)
+    return
+  dst = model.state_dict()
+  for k, v in state.items():
+    if k not in dst:
+      continue
+    if dst[k].shape == v.shape:
+      dst[k] = v
+    elif dst[k].ndim == v.ndim and dst[k].shape[1:] == v.shape[1:]:
+      dst[k] = _copy_head_rows(dst[k], v)
+    elif dst[k].ndim == 1 and v.ndim == 1:
+      dst[k] = _copy_head_rows(dst[k], v)
+  model.load_state_dict(dst, strict=True)
+  print(f"expanded classifier {src_classes} → {dst_classes} (new rows random)", flush=True)
+
+
 def run_finetune(args):
   ckpt_path = Path(args.finetune)
   if not ckpt_path.exists():
@@ -189,17 +223,22 @@ def run_finetune(args):
     blob = torch.load(ckpt_path, map_location=args.device, weights_only=False)
   except TypeError:
     blob = torch.load(ckpt_path, map_location=args.device)
-  labels = list(blob.get("labels") or DRIVE_LABELS)
+  src_labels = list(blob.get("labels") or DRIVE_LABELS)
+  labels = list(BGT_LABELS)
   src_cfg = dict(blob.get("config") or {})
   window = int(src_cfg.get("window", args.window) or args.window)
   files = index_bgt_drive(args.bgt_data)
   by: dict[int, int] = {}
   for _, lab in files:
     by[int(lab)] = by.get(int(lab), 0) + 1
-  print(f"BGT clips: {len(files)}  per-class={ {DRIVE_LABELS[k]: v for k, v in sorted(by.items())} }", flush=True)
-  missing = [DRIVE_LABELS[i] for i in range(len(DRIVE_LABELS)) if by.get(i, 0) == 0]
+  counts = {labels[k]: v for k, v in sorted(by.items()) if k < len(labels)}
+  print(f"BGT clips: {len(files)}  per-class={counts}", flush=True)
+  missing = [labels[i] for i in range(len(labels)) if by.get(i, 0) == 0]
   if missing:
-    raise SystemExit(f"Need clips for all three classes; missing {missing} under {args.bgt_data}")
+    raise SystemExit(
+      f"Need clips for all {len(labels)} classes; missing {missing} under {args.bgt_data}. "
+      f"Collect with GUI Collect or: python gestureEdge/collect_drive.py --class \"Palm Tilt\" --reps 15"
+    )
   train_files, val_files = split_bgt_files(files, val_ratio=args.val_ratio, seed=args.seed)
   train_ds = BgtDriveDataset(train_files, window=window, train=True, seed=args.seed)
   val_ds = BgtDriveDataset(val_files, window=window, train=False, seed=args.seed + 1)
@@ -216,7 +255,7 @@ def run_finetune(args):
     lstm_hidden=int(src_cfg.get("lstm_hidden", args.lstm_hidden)),
     modality_dropout=args.modality_dropout,
   ).to(args.device)
-  model.load_state_dict(blob["model_state"], strict=True)
+  _load_finetune_state(model, blob["model_state"], src_classes=len(src_labels))
   freeze = not bool(args.no_freeze_cnn)
   if args.freeze_cnn:
     freeze = True
@@ -239,7 +278,7 @@ def run_finetune(args):
     "modality_dropout": args.modality_dropout,
     "dataset": "bgt_drive",
     "task": "drive_bgt_finetune",
-    "soli_ids": list(DRIVE_SOLI_IDS),
+    "soli_ids": list(BGT_SOLI_IDS),
     "arch": "cnn_lstm_cross_dual",
     "backend": "gesture_edge",
     "use_dsp_gate": False,
@@ -249,7 +288,7 @@ def run_finetune(args):
   best_path = args.out / "best_gesture_edge.pt"
   print(
     f"gestureEdge drive_bgt_finetune: train={len(train_ds)} val={len(val_ds)} "
-    f"window={window} lr={args.lr} device={args.device} -> {best_path}",
+    f"classes={labels} window={window} lr={args.lr} device={args.device} -> {best_path}",
     flush=True,
   )
   best, history = _loop(model, train_loader, val_loader, optim, sched, args, labels, cfg, best_path)

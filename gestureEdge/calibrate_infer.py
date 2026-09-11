@@ -120,7 +120,12 @@ def load_calibrator(path: Path, device: str = "cpu"):
 
 
 def apply_calibrator(net, mu, sd, feat: np.ndarray) -> np.ndarray:
-  x = (np.asarray(feat, np.float32) - mu) / sd
+  x = np.asarray(feat, np.float32).reshape(-1)
+  mu = np.asarray(mu, np.float32).reshape(-1)
+  sd = np.asarray(sd, np.float32).reshape(-1)
+  if x.size != mu.size or x.size != sd.size:
+    raise ValueError(f"calibrator feat {x.size} vs mu {mu.size}")
+  x = (x - mu) / sd
   with torch.no_grad():
     logits = net(torch.from_numpy(x).unsqueeze(0))[0]
     return F.softmax(logits, -1).numpy().astype(np.float32)

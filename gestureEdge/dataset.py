@@ -12,7 +12,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-from .preprocess import SOLI_LABELS, soli_clip_to_tensor, window_clip, DRIVE_LABELS, DRIVE_SLUGS
+from .preprocess import BGT_LABELS, BGT_SLUGS, SOLI_LABELS, soli_clip_to_tensor, window_clip
 
 
 @dataclass(frozen=True)
@@ -146,8 +146,8 @@ class SoliGestureDataset(Dataset):
 
 def _slug_to_label(slug: str) -> int | None:
   key = slug.replace(" ", "_").lower()
-  for i, name in enumerate(DRIVE_SLUGS):
-    if name.lower() == key or DRIVE_LABELS[i].lower() == slug.lower():
+  for i, name in enumerate(BGT_SLUGS):
+    if name.lower() == key or BGT_LABELS[i].lower() == slug.lower():
       return i
   return None
 
@@ -163,7 +163,7 @@ def index_bgt_drive(root: Path) -> list[tuple[Path, int]]:
       continue
     out.append((path, lab))
   if not out:
-    raise FileNotFoundError(f"No Push/Pull/Palm_Hold .npz under {root}")
+    raise FileNotFoundError(f"No Push/Pull/Palm_Hold/Palm_Tilt .npz under {root}")
   return out
 
 

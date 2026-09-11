@@ -19,11 +19,10 @@ _ROOT = Path(__file__).resolve().parents[1]
 if str(_ROOT) not in sys.path:
   sys.path.insert(0, str(_ROOT))
 
-from gestureEdge.preprocess import DRIVE_LABELS, SOLI_ID_TO_NAME, live_rd_to_frame
+from gestureEdge.preprocess import BGT_LABELS, DRIVE_LABELS, SOLI_ID_TO_NAME, live_rd_to_frame
 
 
-COLLECT_EXTRA: tuple[str, ...] = ("Palm Tilt",)
-COLLECT_LABELS: tuple[str, ...] = tuple(DRIVE_LABELS) + COLLECT_EXTRA
+COLLECT_LABELS: tuple[str, ...] = tuple(BGT_LABELS)
 
 
 def slug_for(label: str) -> str:
@@ -147,7 +146,7 @@ def main():
   args = parse_args()
   from radar_utils import DualRadarSession
 
-  labels = [args.only_class] if args.only_class else list(DRIVE_LABELS)
+  labels = [args.only_class] if args.only_class else list(COLLECT_LABELS)
   resolved = []
   for lab in labels:
     hit = None
