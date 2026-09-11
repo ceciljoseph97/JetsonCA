@@ -43,6 +43,7 @@ def make_gui_bench_args(**overrides: Any) -> argparse.Namespace:
     radar1_port=None,
     radar2_port=None,
     no_mirror_radar2=True,
+    mirror_radar2=False,
     min_range_m=0.0,
     max_range_m=None,
     system_monitor=True,
@@ -55,6 +56,8 @@ def make_gui_bench_args(**overrides: Any) -> argparse.Namespace:
   )
   for key, value in overrides.items():
     setattr(ns, key, value)
+  if "mirror_radar2" not in overrides:
+    ns.mirror_radar2 = not bool(getattr(ns, "no_mirror_radar2", True))
   return ns
 
 
