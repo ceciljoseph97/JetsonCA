@@ -1,7 +1,7 @@
 {
-  "timestamp_utc": "2026-09-07T13:14:35.192865+00:00",
+  "timestamp_utc": "2026-09-11T11:54:25.049615+00:00",
   "benchmark_source": "live",
-  "checkpoint": "/home/cj/AIDisco/JetsonCA/artifacts/walking_bg_audio_v1/best_multimodal_crossattention.pt",
+  "checkpoint": "artifacts/walking_bg_audio_v1/best_multimodal_crossattention.pt",
   "device": "cuda",
   "platform": {
     "hostname": "cj-desktop",
@@ -3167,37 +3167,37 @@
     "sample_interval_ms": 500.0,
     "process_cpu_percent": {
       "count": 44.0,
-      "mean": 52.43181818181818,
-      "max": 111.0
+      "mean": 56.975000000000016,
+      "max": 115.3
     },
     "process_rss_mb": {
       "count": 44.0,
-      "mean": 1450.9825994318182,
-      "max": 1455.203125
+      "mean": 948.3166725852273,
+      "max": 1362.171875
     },
     "system_cpu_avg_percent": {
       "count": 44.0,
-      "mean": 22.220454545454547,
-      "max": 32.53333333333334
+      "mean": 21.916287878787877,
+      "max": 35.56666666666666
     },
     "system_cpu_peak_percent": {
       "count": 44.0,
-      "mean": 41.24090909090909,
-      "max": 80.8
+      "mean": 46.28636363636363,
+      "max": 93.9
     },
     "system_ram_used_mb": {
       "count": 44.0,
-      "mean": 3103.871892755682,
-      "max": 3115.90234375
+      "mean": 2574.630859375,
+      "max": 2885.37109375
     },
     "tegrastats_gr3d_util_percent": {
-      "count": 43.0,
-      "mean": 17.232558139534884,
+      "count": 44.0,
+      "mean": 19.886363636363637,
       "max": 99.0
     },
     "tegrastats_emc_util_percent": null,
     "psutil_samples": 44.0,
-    "tegrastats_samples": 43.0
+    "tegrastats_samples": 44.0
   },
   "notes": [
     "FLOPs = 2 * MACs (mul-add counted as 2).",
@@ -3249,7 +3249,7 @@
         "radar2_uuid": null,
         "radar1_port": null,
         "radar2_port": null,
-        "mirror_radar2": true,
+        "mirror_radar2": false,
         "fusion_meta_last": {
           "radar1_live": true,
           "radar2_live": true,
@@ -3261,63 +3261,63 @@
         "timing": {
           "radar_capture_ms": {
             "count": 98.0,
-            "mean_ms": 135.77002070417862,
-            "std_ms": 70.511861698306,
-            "min_ms": 8.505537000019103,
-            "max_ms": 202.65471799939405,
-            "p50_ms": 186.5987179990043,
-            "p95_ms": 201.3711265002712,
-            "p99_ms": 202.32132900157012
+            "mean_ms": 130.95943091831236,
+            "std_ms": 75.40980936609033,
+            "min_ms": 8.123341000100481,
+            "max_ms": 201.87211000029492,
+            "p50_ms": 182.22390750042905,
+            "p95_ms": 200.1135118001912,
+            "p99_ms": 201.77479959985249
           },
           "radar_fuse_ms": {
             "count": 98.0,
-            "mean_ms": 0.020661632723723806,
-            "std_ms": 0.006095944330540944,
-            "min_ms": 0.012602002243511379,
-            "max_ms": 0.05609999789157882,
-            "p50_ms": 0.020612998923752457,
-            "p95_ms": 0.028230798670847428,
-            "p99_ms": 0.03627514022809921
+            "mean_ms": 0.020006346913964527,
+            "std_ms": 0.004795449661500953,
+            "min_ms": 0.012456999684218317,
+            "max_ms": 0.029521000215027016,
+            "p50_ms": 0.021957000171823893,
+            "p95_ms": 0.025913399667842892,
+            "p99_ms": 0.028062119763490045
           },
           "camera_fetch_preprocess_ms": {
             "count": 69.0,
-            "mean_ms": 8.070935739311423,
-            "std_ms": 1.8539801185070957,
-            "min_ms": 5.058205999375787,
-            "max_ms": 12.341921999905026,
-            "p50_ms": 8.043943998927716,
-            "p95_ms": 11.608299199724566,
-            "p99_ms": 12.16040347891976
+            "mean_ms": 10.642977579769596,
+            "std_ms": 3.6380095579777856,
+            "min_ms": 5.4428639996331185,
+            "max_ms": 22.00368099965999,
+            "p50_ms": 10.100625000632135,
+            "p95_ms": 16.961771600108474,
+            "p99_ms": 19.55943936041874
           },
           "audio_mel_ms": {
             "count": 40.0,
-            "mean_ms": 35.72610649962371,
-            "std_ms": 4.821605188102589,
-            "min_ms": 25.31741500206408,
-            "max_ms": 46.48755999733112,
-            "p50_ms": 36.58605000055104,
-            "p95_ms": 43.96018514780735,
-            "p99_ms": 45.73651515813253
+            "mean_ms": 35.004045024970765,
+            "std_ms": 6.571047155120296,
+            "min_ms": 25.116556000284618,
+            "max_ms": 52.45728499994584,
+            "p50_ms": 36.3647574999959,
+            "p95_ms": 42.80695010065756,
+            "p99_ms": 49.14602822012056
           },
           "inference_ms": {
             "count": 30.0,
-            "mean_ms": 95.26609670004594,
-            "std_ms": 8.536841386577484,
-            "min_ms": 80.18321599956835,
-            "max_ms": 110.21462499775225,
-            "p50_ms": 94.88104800038855,
-            "p95_ms": 108.65107299887313,
-            "p99_ms": 109.96764069775963
+            "mean_ms": 82.84758306666238,
+            "std_ms": 7.203931545670194,
+            "min_ms": 70.74751100026333,
+            "max_ms": 108.25170899988734,
+            "p50_ms": 82.96900200048185,
+            "p95_ms": 92.36775949989351,
+            "p99_ms": 103.89811995976744
           },
           "total_loop_ms": {
             "count": 30.0,
-            "mean_ms": 199.7420671999862,
-            "std_ms": 18.1002069515254,
-            "min_ms": 167.22214000037638,
-            "max_ms": 233.32247999860556,
-            "p50_ms": 198.56258900108514,
-            "p95_ms": 226.2339796527158,
-            "p99_ms": 231.30546938995394
+            "mean_ms": 185.6309325334223,
+            "std_ms": 33.72648442824508,
+            "min_ms": 118.17240900018078,
+            "max_ms": 240.37006900016422,
+            "p50_ms": 194.83274599997458,
+            "p95_ms": 224.4834719001119,
+            "p99_ms": 235.78386951009634
           }
         },
         "notes": [
@@ -6636,20 +6636,20 @@
       "latency": {
         "runs": 30.0,
         "warmup": 10.0,
-        "latency_ms_mean": 95.26609670004594,
-        "latency_ms_std": 8.536841386577484,
-        "latency_ms_min": 80.18321599956835,
-        "latency_ms_max": 110.21462499775225,
-        "latency_ms_p50": 94.88104800038855,
-        "latency_ms_p95": 108.65107299887313,
-        "latency_ms_p99": 109.96764069775963,
-        "throughput_fps": 10.496913746225921
+        "latency_ms_mean": 82.84758306666238,
+        "latency_ms_std": 7.203931545670194,
+        "latency_ms_min": 70.74751100026333,
+        "latency_ms_max": 108.25170899988734,
+        "latency_ms_p50": 82.96900200048185,
+        "latency_ms_p95": 92.36775949989351,
+        "latency_ms_p99": 103.89811995976744,
+        "throughput_fps": 12.07035815631895
       },
       "performance": {
-        "achieved_mops_per_s": 50147.99805477594,
-        "achieved_gflops_per_s": 100.29599610955188,
-        "conv2d_mops_per_s": 49383.60910086213,
-        "temporal_transformer_mops_per_s": 252.4902439924192,
+        "achieved_mops_per_s": 57664.97772368224,
+        "achieved_gflops_per_s": 115.32995544736447,
+        "conv2d_mops_per_s": 56786.00999397301,
+        "temporal_transformer_mops_per_s": 290.3374982061385,
         "note": "achieved_* = theoretical ops / measured mean inference latency on live data windows"
       }
     }
